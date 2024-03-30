@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=File Manager
+Comment=Tree based terminal file manager
+Keywords=folder;manager;explore;disk;filesystem;
+TryExec=/usr/bin/fm
+Exec=/usr/bin/fm %U
+Icon=file-manager
+Terminal=true
+Type=Application
+Categories=Utility;Core;FileManager;
+MimeType=inode/directory;

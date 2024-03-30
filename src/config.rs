@@ -153,6 +153,6 @@ mod tests {
 
     #[test]
     fn test_read_config() {
-        let _ = read_config("./config.toml").unwrap();
+        let _ = read_config("./desktop/config.toml").unwrap();
     }
 }

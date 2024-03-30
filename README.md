@@ -36,7 +36,7 @@ This is a list of features and design decisions for `fm`:
 
 - Can be used as a file picker (I use it with `xdg-desktop-portal` to select files).
 
-- Makes use of unicode icons which can be configured for each file type ``.
+- Makes use of unicode icons which can be configured for each file type.
 
 - Mouse integration for scrolling, navigating directories and opening files.
 
@@ -44,7 +44,7 @@ This is a list of features and design decisions for `fm`:
 
 The file manager can be configured using a configuration file typically located in `$XDG_CONFIG_HOME/fm/config.toml`.
 
-A sample configuration file is present in the root of the repository `/config.toml`.
+A sample configuration file can be found in `desktop/config.toml` in this repository.
 
 ## Keybindings
 

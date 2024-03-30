@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package server;
+
+message Request {
+	Command command = 1;
+  	repeated string files = 2;
+}
+
+enum Command {
+	DEFAULT_VALUE = 0;
+	COPY = 1;
+	CUT = 2;
+	CLEAR = 3;
+	GET_COPY = 4;
+	GET_CUT = 5;
+}
+
+message Response {
+  	string status = 1;
+	repeated string files = 2;
+}

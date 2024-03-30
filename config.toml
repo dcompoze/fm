@@ -1,0 +1,92 @@
+icon_spacing = 2
+indent_first_level = false
+indent_guide = "│"
+indent_spaces = 3
+info = ["git", "size"]
+mouse = true
+path_line_spacing = 2
+selection_symbol = "●"
+shell = ["zsh", "-c"]
+show_hidden = false
+status_line_spacing = 2
+
+[status]
+center = []
+left = ["git_branch", "git_submodules", "lines_of_code", "link"]
+right = ["item_count", "file_watcher_count"]
+
+[keys]
+"/" = "find"
+":" = "command_bar"
+";" = "expand"
+"?" = "search"
+C = "clear_files"
+"C-r" = "refresh"
+"C-s" = ":sh window-session-root"
+D = ":sh drag-n-drop"
+E = ":sh window-edit"
+I = ":sh imv-dir"
+L = ":sh git-log"
+N = "new_dir"
+Q = "quit_cd"
+S = ":sh window-session"
+T = "trash"
+V = ":sh vscode"
+a = "root_up"
+c = "cut"
+down = "down"
+e = "edit"
+escape = "clear"
+f = "root_down"
+g = { g = "goto_top", e = "goto_bottom" }
+i = "preview"
+j = "collapse"
+k = "down"
+l = "up"
+left = "collapse"
+n = "new_file"
+o = "open"
+p = "paste"
+q = "quit"
+r = "rename"
+right = "expand"
+s = "shell"
+space = "select"
+up = "up"
+y = "copy"
+
+[style]
+archive = { icon = "", fg = "red", bg = "default", modifiers = [] }
+audio = { icon = "", fg = "cyan", bg = "default", modifiers = [] }
+command_line = { fg = "", bg = "", modifiers = [] }
+cursor_line = { fg = "", bg = "", modifiers = [] }
+default = { fg = "white", bg = "black", modifiers = [] }
+directory = { icon = "", fg = "blue", bg = "default", modifiers = [] }
+document = { icon = "", fg = "default", bg = "default", modifiers = [] }
+executable = { icon = "", fg = "green", bg = "default", modifiers = [] }
+file = { icon = "", fg = "default", bg = "default", modifiers = [] }
+image = { icon = "", fg = "magenta", bg = "default", modifiers = [] }
+link = { icon = "", fg = "cyan", bg = "default", modifiers = [] }
+path_line = { fg = "", bg = "", modifiers = [] }
+status_line = { fg = "", bg = "", modifiers = [] }
+video = { icon = "", fg = "magenta", bg = "default", modifiers = [] }
+
+[[files]]
+extensions = ["mp4", "mkv", "wav", "webm", "wav", "avi"]
+style = "video"
+
+[[files]]
+extensions = ["mp3"]
+style = "audio"
+
+[[files]]
+extensions = ["tar", "zip", "gz"]
+style = "archive"
+
+[[files]]
+extensions = ["jpg", "jpeg", "png", "svg", "webp", "gif"]
+style = "image"
+
+[[files]]
+extensions = ["epub", "pdf", "mobi", "azw", "ipynb"]
+style = "document"

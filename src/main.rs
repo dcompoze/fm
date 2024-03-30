@@ -76,7 +76,7 @@ async fn main() -> Result<(), Error> {
         .version("1.0")
         .author("dcompoze")
         .disable_help_flag(false)
-        .about("Terminal file manager based on a tree view")
+        .about("Tree-based terminal file manager")
         .arg(
             arg!(--"last-dir-path" <PATH> "File containing last dir location")
                 .required(false)
@@ -94,6 +94,11 @@ async fn main() -> Result<(), Error> {
         )
         .arg(
             arg!(--"file-chooser-multiple" <PATH> "File chooser multiple file mode")
+                .required(false)
+                .action(ArgAction::Set),
+        )
+        .arg(
+            arg!(--"override-config" <KV> "Override a configuration value e.g. show_hidden=false")
                 .required(false)
                 .action(ArgAction::Set),
         )
@@ -295,6 +300,8 @@ async fn main() -> Result<(), Error> {
                     MouseEventKind::ScrollUp => {
                         app.up();
                     }
+                    MouseEventKind::ScrollLeft => {}
+                    MouseEventKind::ScrollRight => {}
                 },
                 Event::Key(KeyEvent { code, modifiers, .. }) => match (code, modifiers) {
                     (KeyCode::Char(':'), KeyModifiers::NONE) => {

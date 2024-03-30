@@ -12,7 +12,7 @@ I've used terminal file managers such as `ranger` or `lf` in the past but most o
 
 I use `fm` primarily for code development like so:
 
-<div><img src="screenshot.png" width="100%"></div>
+<div><img src="docs/screenshot.png" width="100%"></div>
 
 ## Features
 

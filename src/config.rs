@@ -1,9 +1,11 @@
-use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+use anyhow::{anyhow, Error, Result};
 use serde::Deserialize;
+
+pub const DEFAULT_CONFIG: &str = include_str!("../desktop/config.toml");
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -134,7 +136,7 @@ pub struct Files {
     pub style: String,
 }
 
-pub fn read_config<P: AsRef<Path>>(path: P) -> Result<Config, Box<dyn Error>> {
+pub fn read_config<P: AsRef<Path>>(path: P) -> Result<Config> {
     let mut file = File::open(path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
@@ -143,8 +145,13 @@ pub fn read_config<P: AsRef<Path>>(path: P) -> Result<Config, Box<dyn Error>> {
     Ok(config)
 }
 
-pub fn read_config_default() -> Result<Config, Box<dyn Error>> {
-    read_config("/home/admin/.config/fm/config.toml")
+impl Config {
+    pub fn set_key(&mut self, key: &str, value: &str) -> Result<()> {
+        if key == "show_hidden" {
+            self.show_hidden = value == "true";
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

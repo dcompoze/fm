@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
 use std::{env, fs, io, path, process, vec};
 
-use anyhow::Context;
+use anyhow::{anyhow, Error, Result};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use crossterm::cursor::{position, Hide};
 use crossterm::event::MouseButton::{Left, Middle, Right};
@@ -36,8 +36,6 @@ use tui::Terminal;
 use crate::{dbgf, files, proto, Config, File};
 
 type CrossTerminal = Terminal<CrosstermBackend<io::Stdout>>;
-
-type Error = Box<dyn std::error::Error>;
 
 pub struct Application<'a> {
     pub terminal: &'a mut CrossTerminal,
@@ -188,7 +186,7 @@ impl<'a> Application<'a> {
         git_modules: &HashSet<PathBuf>,
         config: &Config,
         file: &File,
-    ) -> Result<Vec<ListItem<'a>>, Error> {
+    ) -> Result<Vec<ListItem<'a>>> {
         let mut items: Vec<ListItem> = Vec::new();
         if !file.descendants.is_empty() {
             for descendant in &file.descendants {
@@ -219,7 +217,7 @@ impl<'a> Application<'a> {
                 let item_name = descendant
                     .path
                     .file_name()
-                    .ok_or("invalid path")?
+                    .ok_or(anyhow!("invalid path"))?
                     .to_string_lossy();
                 let icon_width = 3;
                 let item_pad_width = frame_width
@@ -771,11 +769,11 @@ impl<'a> Application<'a> {
 
             if let Ok(proto::Response { status, files }) = response {
                 if status != "success" {
-                    return Err("server command did not succeed".into());
+                    return Err(anyhow!("server command did not succeed"));
                 }
                 self.copied = files.into_iter().map(PathBuf::from).collect();
             } else {
-                return Err("failed to decode server response".into());
+                return Err(anyhow!("failed to decode server response"));
             }
         }
 
@@ -790,11 +788,11 @@ impl<'a> Application<'a> {
             let response = send_server_request(&mut client, &request);
             if let Ok(proto::Response { status, files }) = response {
                 if status != "success" {
-                    return Err("server command did not succeed".into());
+                    return Err(anyhow!("server command did not succeed"));
                 }
                 self.cut = files.into_iter().map(PathBuf::from).collect();
             } else {
-                return Err("failed to decode server response".into());
+                return Err(anyhow!("failed to decode server response"));
             }
         }
         Ok(())
@@ -817,10 +815,10 @@ impl<'a> Application<'a> {
 
         if let Ok(proto::Response { status, files }) = response {
             if status != "success" {
-                return Err("server command did not succeed".into());
+                return Err(anyhow!("server command did not succeed"));
             }
         } else {
-            return Err("failed to decode server response".into());
+            return Err(anyhow!("failed to decode server response"));
         }
 
         Ok(())
@@ -843,10 +841,10 @@ impl<'a> Application<'a> {
 
         if let Ok(proto::Response { status, files }) = response {
             if status != "success" {
-                return Err("server command did not succeed".into());
+                return Err(anyhow!("server command did not succeed"));
             }
         } else {
-            return Err("failed to decode server response".into());
+            return Err(anyhow!("failed to decode server response"));
         }
 
         Ok(())
@@ -865,10 +863,10 @@ impl<'a> Application<'a> {
 
         if let Ok(proto::Response { status, files }) = response {
             if status != "success" {
-                return Err("server command did not succeed".into());
+                return Err(anyhow!("server command did not succeed"));
             }
         } else {
-            return Err("failed to decode server response".into());
+            return Err(anyhow!("failed to decode server response"));
         }
 
         Ok(())
@@ -1248,6 +1246,7 @@ impl<'a> Application<'a> {
 
     pub fn toggle_hidden(&mut self) {
         self.configuration.show_hidden = !self.configuration.show_hidden;
+        self.refresh();
     }
 
     pub fn search_all(&mut self) {
@@ -1308,7 +1307,7 @@ impl<'a> Application<'a> {
         self.cmd_post();
     }
 
-    pub fn read_dir(dir: PathBuf, show_hidden: bool) -> Result<File, Error> {
+    pub fn read_dir(dir: PathBuf, show_hidden: bool) -> Result<File> {
         let metadata = fs::metadata(&dir)?;
         let metadata_extra = fs::symlink_metadata(&dir)?;
         let mut descendants: Vec<File> = Vec::new();
@@ -1329,7 +1328,7 @@ impl<'a> Application<'a> {
                         error!("could not read file metadata: {}", entry.path().display());
                         continue;
                     }
-                    _ => return Err(Box::new(error)),
+                    _ => return Err(error.into()),
                 },
                 Ok(metadata) => metadata,
             };
@@ -1339,7 +1338,7 @@ impl<'a> Application<'a> {
                         error!("could not read file symlink metadata: {}", entry.path().display());
                         continue;
                     }
-                    _ => return Err(Box::new(error)),
+                    _ => return Err(error.into()),
                 },
                 Ok(metadata) => metadata,
             };

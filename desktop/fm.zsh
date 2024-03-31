@@ -1,3 +1,5 @@
+#compdef fm
+
 _fm() {
     local -a options
     local -a file_path
@@ -9,5 +11,3 @@ _fm() {
 
     _arguments $options
 }
-
-compdef _fm fm

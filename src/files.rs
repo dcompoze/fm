@@ -6,14 +6,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io, path, process};
 
+use anyhow::{anyhow, Error, Result};
 use git2::{DiffOptions, Repository};
 use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::ListItem;
 
 use crate::Config;
-
-type Error = Box<dyn std::error::Error>;
 
 #[derive(Clone, Debug)]
 pub struct File {

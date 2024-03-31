@@ -12,6 +12,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{env, fs, io, os, path, process, thread, vec};
 
+use anyhow::{anyhow, Error, Result};
 use application::Application;
 use clap::{arg, Arg, ArgAction, Command};
 use config::Config;
@@ -67,10 +68,8 @@ pub(crate) mod proto {
 
 type CrossTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
-type Error = Box<dyn std::error::Error>;
-
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<()> {
     // Parse command line flags and arguments.
     let cmd = Command::new("File manager")
         .version("1.0")
@@ -78,32 +77,66 @@ async fn main() -> Result<(), Error> {
         .disable_help_flag(false)
         .about("Tree-based terminal file manager")
         .arg(
-            arg!(--"last-dir-path" <PATH> "File containing last dir location")
-                .required(false)
-                .action(ArgAction::Set),
+            Arg::new("last-dir-path")
+                .long("last-dir-path")
+                .value_name("PATH")
+                .help("File containing last dir location")
+                .action(ArgAction::Set)
+                .required(false),
         )
         .arg(
-            arg!(--"file-chooser-dir" <PATH> "File chooser in dir mode")
-                .required(false)
-                .action(ArgAction::Set),
+            Arg::new("file-chooser-dir")
+                .long("file-chooser-dir")
+                .value_name("PATH")
+                .help("File chooser dir mode")
+                .action(ArgAction::Set)
+                .required(false),
         )
         .arg(
-            arg!(--"file-chooser-single" <PATH> "File chooser single file mode")
-                .required(false)
-                .action(ArgAction::Set),
+            Arg::new("file-chooser-single")
+                .long("file-chooser-single")
+                .value_name("PATH")
+                .help("File chooser single file mode")
+                .action(ArgAction::Set)
+                .required(false),
         )
         .arg(
-            arg!(--"file-chooser-multiple" <PATH> "File chooser multiple file mode")
-                .required(false)
-                .action(ArgAction::Set),
+            Arg::new("file-chooser-multiple")
+                .long("file-chooser-multiple")
+                .value_name("PATH")
+                .help("File chooser multiple file mode")
+                .action(ArgAction::Set)
+                .required(false),
         )
         .arg(
-            arg!(--"override-config" <KV> "Override a configuration value e.g. show_hidden=false")
-                .required(false)
-                .action(ArgAction::Set),
+            Arg::new("override-config")
+                .long("override-config")
+                .value_name("KEY_VALUE")
+                .help("Override a configuration value e.g. show_hidden=false")
+                .action(ArgAction::Set)
+                .required(false),
         )
-        .arg(arg!([dir] "Directory to open").required(false))
+        .arg(Arg::new("dir").help("Directory to open").required(false).index(1))
         .get_matches();
+
+    // Get useful system information.
+    let user = whoami::username();
+    let home_dir = dirs::home_dir().unwrap_or(format!("/home/{}", user).into());
+    let config_dir = dirs::config_dir().unwrap_or(home_dir.join(".config"));
+    let data_dir = dirs::data_dir().unwrap_or(home_dir.join(".local/share"));
+    let fm_config_dir = config_dir.join("fm");
+    let fm_data_dir = data_dir.join("fm");
+    let fm_config_file = fm_config_dir.join("config.toml");
+    let fm_log_file = fm_data_dir.join("log");
+
+    // Create program directories if they don't already exist.
+    fs::create_dir_all(fm_config_dir)?;
+    fs::create_dir_all(fm_data_dir)?;
+
+    // Create a default configuration file if necessary.
+    if !fm_config_file.exists() {
+        fs::write(fm_config_file.clone(), config::DEFAULT_CONFIG)?;
+    }
 
     // Set up the file logger.
     let log_file = Box::new(
@@ -111,7 +144,7 @@ async fn main() -> Result<(), Error> {
             .write(true)
             .read(true)
             .create(true)
-            .open("/home/admin/.config/fm/log")?,
+            .open(fm_log_file)?,
     );
     env_logger::builder()
         .format(|buf, record| writeln!(buf, "{}: {}", record.level(), record.args()))
@@ -136,9 +169,18 @@ async fn main() -> Result<(), Error> {
     )?;
     let mut terminal = Terminal::new(backend)?;
 
-    // Construct directory tree from current location.
+    // Get current location and load the configuration.
     let current_dir = env::current_dir()?;
-    let configuration = config::read_config_default()?;
+    let mut configuration = config::read_config(fm_config_file)?;
+    // Override configuration if specified.
+    if let Some(key_vals) = cmd.get_many::<String>("override-config") {
+        key_vals.for_each(|key_val| {
+            if let Some((key, value)) = key_val.split_once('=') {
+                configuration.set_key(key, value);
+            }
+        });
+    }
+    // Construct directory tree from current location.
     let root = Application::read_dir(current_dir, configuration.show_hidden)?;
 
     let (sender, receiver): (Sender<()>, Receiver<()>) = mpsc::channel();
@@ -480,7 +522,7 @@ macro_rules! dbgf {
             .create(true)
             .append(true)
             .write(true)
-            .open("/tmp/output")
+            .open("/tmp/debuglog")
             .unwrap();
         writeln!(&mut file, "{:?}", $arg).unwrap();
     }};

@@ -5,15 +5,16 @@ use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io::{BufReader, Read, Stdout, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{env, fs, io, os, path, process, thread, vec};
 
 use anyhow::{anyhow, Error, Result};
-use application::Application;
+use application::{Application, SOCKET_PATH};
 use clap::{arg, Arg, ArgAction, Command};
 use config::Config;
 use crossterm::cursor::{position, Hide};
@@ -47,6 +48,7 @@ use crossterm::{cursor, execute, queue, terminal, ExecutableCommand, QueueableCo
 use files::File;
 use fs4::FileExt;
 use log::{error, info, warn};
+use subprocess::{PopenConfig, Redirection};
 use tokio::task;
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::{Alignment, Constraint, Direction, Layout};
@@ -137,6 +139,9 @@ async fn main() -> Result<()> {
     if !fm_config_file.exists() {
         fs::write(fm_config_file.clone(), config::DEFAULT_CONFIG)?;
     }
+
+    // Start the server daemon.
+    spawn_server()?;
 
     // Set up the file logger.
     let log_file = Box::new(
@@ -512,6 +517,20 @@ fn flush_resize_events(event: Event) -> ((u16, u16), (u16, u16)) {
         return ((x, y), last_resize);
     }
     ((0, 0), (0, 0))
+}
+
+fn spawn_server() -> Result<()> {
+    let _process = subprocess::Popen::create(
+        &["fm-server"],
+        PopenConfig {
+            stdout: Redirection::Pipe,
+            stderr: Redirection::Pipe,
+            detached: true,
+            ..Default::default()
+        },
+    )?;
+
+    Ok(())
 }
 
 #[macro_export]

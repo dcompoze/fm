@@ -35,6 +35,8 @@ use tui::Terminal;
 
 use crate::{dbgf, files, proto, Config, File};
 
+pub const SOCKET_PATH: &str = "/tmp/fm.sock";
+
 type CrossTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
 pub struct Application<'a> {
@@ -756,11 +758,9 @@ impl<'a> Application<'a> {
     }
 
     pub fn synchronize(&mut self) -> Result<(), Error> {
-        let socket_path = "/tmp/fm.sock";
-
         // Get the copy list from the server.
         {
-            let mut client = UnixStream::connect(socket_path)?;
+            let mut client = UnixStream::connect(SOCKET_PATH)?;
             let request = proto::Request {
                 command: proto::Command::GetCopy.into(),
                 files: vec![],
@@ -779,7 +779,7 @@ impl<'a> Application<'a> {
 
         // Get the cut list from the server.
         {
-            let mut client = UnixStream::connect(socket_path)?;
+            let mut client = UnixStream::connect(SOCKET_PATH)?;
             let request = proto::Request {
                 command: proto::Command::GetCut.into(),
                 files: vec![],
@@ -851,8 +851,7 @@ impl<'a> Application<'a> {
     }
 
     pub fn send_clear(&self) -> Result<(), Error> {
-        let socket_path = "/tmp/fm.sock";
-        let mut client = UnixStream::connect(socket_path)?;
+        let mut client = UnixStream::connect(SOCKET_PATH)?;
 
         let request = proto::Request {
             command: proto::Command::Clear.into(),

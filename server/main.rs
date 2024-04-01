@@ -3,9 +3,10 @@ use std::error::Error;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::vec;
+use std::{fs, vec};
 
 use prost::Message;
+use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
@@ -15,15 +16,18 @@ mod proto {
     include!("../proto/server.rs");
 }
 
+const SOCKET_PATH: &str = "/tmp/fm.sock";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    if is_another_server_running() {
+        return Ok(())
+    }
+
     let cut = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
     let copied = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
 
-    let socket_path = "/tmp/fm.sock";
-    std::fs::remove_file(socket_path).unwrap_or_default();
-
-    let listener = UnixListener::bind(socket_path)?;
+    let listener = UnixListener::bind(SOCKET_PATH)?;
 
     loop {
         let (stream, _) = listener.accept().await?;
@@ -119,4 +123,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             //println!("CUT: {:?}", cut);
         });
     }
+}
+
+fn is_another_server_running() -> bool {
+    let system = System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let count = system.processes_by_exact_name("fm-server").count();
+    count > 1
 }

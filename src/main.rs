@@ -244,6 +244,11 @@ async fn main() -> Result<()> {
 
         let event = read()?;
 
+        const NEW_DIR_CMD: &str = "new-dir ";
+        const NEW_FILE_CMD: &str = "new-file ";
+        const SEARCH_CMD: &str = "search ";
+        const SHELL_CMD: &str = "sh ";
+
         if app.command_bar.command_entry_mode {
             if let Event::Key(key) = event {
                 match key.code {
@@ -261,20 +266,20 @@ async fn main() -> Result<()> {
                         }
                     }
                     KeyCode::Enter => {
-                        if app.command_bar.prompt_text == "new-dir:" {
-                            app.new_dir(app.command_bar.input_text.clone());
-                        } else if app.command_bar.prompt_text == "new-file:" {
-                            app.new_file(app.command_bar.input_text.clone());
-                        } else if app.command_bar.prompt_text == "search:" {
-                            app.search(app.command_bar.input_text.clone());
-                        } else {
-                            match app.command_bar.input_text.as_str() {
-                                // Commands that are useful to have but are not bound to a keybinding.
-                                "path" => app.cmd_path(),
-                                "mv" => app.cmd_mv(),
-                                "cp" => app.cmd_cp(),
-                                _ => {}
-                            }
+                        if app.command_bar.input_text.starts_with(NEW_DIR_CMD) {
+                            app.new_dir(app.command_bar.command_parameters(NEW_DIR_CMD));
+                        } else if app.command_bar.input_text.starts_with(NEW_FILE_CMD) {
+                            app.new_file(app.command_bar.command_parameters(NEW_FILE_CMD));
+                        } else if app.command_bar.input_text.starts_with(SEARCH_CMD) {
+                            app.search(app.command_bar.command_parameters(SEARCH_CMD));
+                        } else if app.command_bar.input_text.starts_with(SHELL_CMD) {
+                            app.cmd_shell(app.command_bar.command_parameters(SHELL_CMD));
+                        } else if app.command_bar.input_text == "path" {
+                            app.cmd_path();
+                        } else if app.command_bar.input_text == "mv" {
+                            app.cmd_mv();
+                        } else if app.command_bar.input_text == "cp" {
+                            app.cmd_cp();
                         }
                         app.command_bar.input_text = String::default();
                         app.command_bar.prompt_text = ":".into();
@@ -444,7 +449,7 @@ async fn main() -> Result<()> {
                         app.images();
                     }
                     (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                        app.command_bar.prompt_text = "search:".into();
+                        app.command_bar.input_text = SEARCH_CMD.into();
                         app.command_bar.command_entry_mode = true;
                     }
                     (KeyCode::Char('?'), KeyModifiers::NONE) => {
@@ -457,11 +462,11 @@ async fn main() -> Result<()> {
                         app.git_log();
                     }
                     (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
-                        app.command_bar.prompt_text = "new-dir:".into();
+                        app.command_bar.input_text = NEW_DIR_CMD.into();
                         app.command_bar.command_entry_mode = true;
                     }
                     (KeyCode::Char('n'), KeyModifiers::NONE) => {
-                        app.command_bar.prompt_text = "new-file:".into();
+                        app.command_bar.input_text = NEW_FILE_CMD.into();
                         app.command_bar.command_entry_mode = true;
                     }
                     (KeyCode::Char('r'), KeyModifiers::CONTROL) => {

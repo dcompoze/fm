@@ -67,6 +67,16 @@ pub struct CommandBar {
     pub input_text: String,
 }
 
+impl CommandBar {
+    pub fn command_parameters(&self, command: &str) -> String {
+        if let Some(text) = self.input_text.strip_prefix(command) {
+            text.to_owned()
+        } else {
+            self.input_text.clone()
+        }
+    }
+}
+
 impl<'a> Application<'a> {
     pub fn new(terminal: &'a mut CrossTerminal, config: Config, root: File, sender: Sender<()>) -> Self {
         let mut state = ListState::default();
@@ -869,6 +879,16 @@ impl<'a> Application<'a> {
         }
 
         Ok(())
+    }
+
+    pub fn cmd_shell(&mut self, command: String) {
+        let mut child = process::Command::new("zsh")
+            .arg("-c")
+            .arg(command)
+            .spawn()
+            .expect("failed to execute child process");
+        child.wait().expect("shell command failed");
+        self.refresh();
     }
 
     pub fn cmd_path(&self) {

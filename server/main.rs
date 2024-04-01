@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::{fs, vec};
 
 use prost::Message;
-use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
@@ -18,14 +17,30 @@ mod proto {
 
 const SOCKET_PATH: &str = "/tmp/fm.sock";
 
+/// Cleans up the socket file using RAII (only works on normal exit).
+struct SocketCleanup {
+    path: PathBuf,
+}
+
+impl Drop for SocketCleanup {
+    fn drop(&mut self) {
+        println!("Deleting socket at {:?}", self.path);
+        if fs::remove_file(&self.path).is_err() {
+            eprintln!("Could not remove socket file at {:?}", self.path);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    if is_another_server_running() {
-        return Ok(())
-    }
-
     let cut = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
     let copied = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
+
+    // Handle socket cleanup.
+    let _ = fs::remove_file(SOCKET_PATH);
+    let _cleanup = SocketCleanup {
+        path: SOCKET_PATH.into(),
+    };
 
     let listener = UnixListener::bind(SOCKET_PATH)?;
 
@@ -123,10 +138,4 @@ async fn main() -> Result<(), Box<dyn Error>> {
             //println!("CUT: {:?}", cut);
         });
     }
-}
-
-fn is_another_server_running() -> bool {
-    let system = System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
-    let count = system.processes_by_exact_name("fm-server").count();
-    count > 1
 }

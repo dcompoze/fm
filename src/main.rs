@@ -49,6 +49,7 @@ use files::File;
 use fs4::FileExt;
 use log::{error, info, warn};
 use subprocess::{PopenConfig, Redirection};
+use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tokio::task;
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::{Alignment, Constraint, Direction, Layout};
@@ -141,7 +142,11 @@ async fn main() -> Result<()> {
     }
 
     // Start the server daemon.
-    spawn_server()?;
+    task::spawn_blocking(|| {
+        if !is_server_running() {
+            spawn_server().expect("could not spawn server");
+        }
+    });
 
     // Set up the file logger.
     let log_file = Box::new(
@@ -545,4 +550,10 @@ macro_rules! dbgf {
             .unwrap();
         writeln!(&mut file, "{:?}", $arg).unwrap();
     }};
+}
+
+fn is_server_running() -> bool {
+    let system = System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let process = system.processes_by_exact_name("fm-server").next();
+    process.is_some()
 }

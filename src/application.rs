@@ -950,11 +950,34 @@ impl<'a> Application<'a> {
         self.refresh();
     }
 
-    pub fn paste(&mut self) {
+    pub fn paste(&mut self, root: bool) {
         // When something is selected in the file list.
         if let Some(selected) = self.selected() {
+            // Pate to root directory if this option was chosen.
+            if root {
+                self.synchronize().expect("synchronization failed");
+                for path in self.copied.iter() {
+                    let mut child = process::Command::new("fm-paste")
+                        .arg("copy")
+                        .arg(path.clone())
+                        .arg(self.files.path.clone())
+                        .spawn()
+                        .expect("failed to execute process");
+                    child.wait().expect("child process failed");
+                }
+                for path in self.cut.iter() {
+                    let mut child = process::Command::new("fm-paste")
+                        .arg("cut")
+                        .arg(path.clone())
+                        .arg(self.files.path.clone())
+                        .spawn()
+                        .expect("failed to execute process");
+                    child.wait().expect("child process failed");
+                }
+                self.clear_files();
+                self.refresh();
             // When directory is selected.
-            if selected.metadata.is_dir() {
+            } else if selected.metadata.is_dir() {
                 self.synchronize().expect("synchronization failed");
                 for path in self.copied.iter() {
                     let mut child = process::Command::new("fm-paste")

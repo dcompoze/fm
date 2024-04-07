@@ -485,7 +485,10 @@ async fn main() -> Result<()> {
                         app.clear_files();
                     }
                     (KeyCode::Char('p'), KeyModifiers::NONE) => {
-                        app.paste();
+                        app.paste(false);
+                    }
+                    (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                        app.paste(true);
                     }
                     (KeyCode::Char('g'), KeyModifiers::NONE) => match read()? {
                         Event::Key(KeyEvent {

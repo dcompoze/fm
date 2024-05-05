@@ -1186,6 +1186,16 @@ impl<'a> Application<'a> {
         }
     }
 
+    pub fn editnox(&self) {
+        if let Some(selected) = self.selected() {
+            let mut child = process::Command::new("window-edit-no")
+                .arg(selected.path)
+                .spawn()
+                .expect("failed to execute process");
+            child.wait().expect("child process failed");
+        }
+    }
+
     pub fn editx(&self) {
         if let Some(selected) = self.selected() {
             let mut child = process::Command::new("window-edit")

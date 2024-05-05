@@ -421,6 +421,9 @@ async fn main() -> Result<()> {
                     (KeyCode::Char('e'), KeyModifiers::NONE) => {
                         app.edit();
                     }
+                    (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                        app.editnox();
+                    }
                     (KeyCode::Char('S'), KeyModifiers::SHIFT) => {
                         app.shellx();
                     }

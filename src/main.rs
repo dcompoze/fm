@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread::sleep;
 use std::time::Duration;
 use std::{env, fs, io, os, path, process, thread, vec};
 
@@ -169,6 +170,7 @@ async fn main() -> Result<()> {
     // Get stdin and stdout handles and construct a Terminal object.
     let mut backend = CrosstermBackend::new(io::stdout());
     enable_raw_mode()?;
+    sleep(Duration::from_millis(50)); // Fixes bad size on terminal open.
     execute!(
         backend,
         Clear(ClearType::All),

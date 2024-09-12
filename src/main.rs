@@ -154,6 +154,7 @@ async fn main() -> Result<()> {
         OpenOptions::new()
             .write(true)
             .read(true)
+            .truncate(false)
             .create(true)
             .open(fm_log_file)?,
     );
@@ -347,7 +348,7 @@ async fn main() -> Result<()> {
                             let offset = app.list_state.offset();
                             let clicked = (row - 1) as usize + offset;
                             app.list_state.select(Some(clicked));
-                            app.change_root();
+                            app.change_root().expect("change root failed");
                         }
                     }
                     MouseEventKind::Up(Middle) => {}
@@ -458,7 +459,7 @@ async fn main() -> Result<()> {
                         app.command_bar.command_entry_mode = true;
                     }
                     (KeyCode::Char('?'), KeyModifiers::NONE) => {
-                        app.search_all();
+                        app.search_all().expect("search all failed");
                     }
                     (KeyCode::Char('D'), KeyModifiers::SHIFT) => {
                         app.drag_and_drop();

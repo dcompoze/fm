@@ -623,6 +623,23 @@ impl<'a> Application<'a> {
         find_target_file(&mut self.files, &mut 0, selected + 1)
     }
 
+    pub fn jump_root(&mut self, path: PathBuf) -> Result<(), Error> {
+        if path.is_dir() {
+            env::set_current_dir(path.clone());
+            self.updater.send(())?;
+            let root = Application::read_dir(path.clone(), self.configuration.show_hidden)?;
+            self.files = root;
+            if self.files.is_empty() {
+                self.list_state.select(None);
+            } else {
+                self.list_state.select(Some(0));
+            }
+            self.expanded = HashSet::new();
+            self.set_title()?;
+        }
+        Ok(())
+    }
+
     pub fn change_root(&mut self) -> Result<(), Error> {
         if let Some(selected) = self.selected() {
             if selected.metadata.is_dir() {
@@ -1065,7 +1082,7 @@ impl<'a> Application<'a> {
 
     pub fn cmd_pre(&mut self) {
         disable_raw_mode().expect("could not disable raw mode");
-        let size = self.terminal.size().expect("could not get terminal size");
+        let _size = self.terminal.size().expect("could not get terminal size");
         execute!(
             self.terminal.backend_mut(),
             cursor::MoveTo(0, 0),
@@ -1206,6 +1223,14 @@ impl<'a> Application<'a> {
         }
     }
 
+    pub fn editx_path(&self, path: PathBuf) {
+        let mut child = process::Command::new("window-edit")
+            .arg(path)
+            .spawn()
+            .expect("failed to execute process");
+        child.wait().expect("child process failed");
+    }
+
     pub fn file_manager(&self) {
         if let Some(selected) = self.selected() {
             if selected.metadata.is_dir() {
@@ -1301,18 +1326,22 @@ impl<'a> Application<'a> {
         self.refresh();
     }
 
-    pub fn search_all(&mut self) {
+    pub fn search_all(&mut self) -> Result<(), Error> {
         self.cmd_pre();
         let mut child = process::Command::new("fm-search-all")
             .arg(self.files.path.clone())
-            .spawn()
-            .expect("failed to execute process");
-        child.wait().expect("child process failed");
+            .spawn()?;
+        child.wait()?;
         //let path = String::from_utf8_lossy(&output.stdout);
-        let contents = fs::read_to_string("/tmp/fm-search-all").expect("cannot read /tmp/fm-search-all");
+        let contents = fs::read_to_string("/tmp/fm-search-all")?;
         let path = PathBuf::from(contents);
-        // TODO: Expand the tree based on the obtained path and select the file or dir.
+        if path.is_dir() {
+            self.jump_root(path)?;
+        } else {
+            self.editx_path(path);
+        }
         self.cmd_post();
+        Ok(())
     }
 
     pub fn vscode(&self) {

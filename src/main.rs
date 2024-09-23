@@ -47,7 +47,7 @@ use crossterm::terminal::{
 use crossterm::tty::IsTty;
 use crossterm::{cursor, execute, queue, terminal, ExecutableCommand, QueueableCommand};
 use files::File;
-use fs4::FileExt;
+use fs4::fs_std::FileExt;
 use log::{error, info, warn};
 use subprocess::{PopenConfig, Redirection};
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
@@ -568,6 +568,6 @@ macro_rules! dbgf {
 
 fn is_server_running() -> bool {
     let system = System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
-    let process = system.processes_by_exact_name("fm-server").next();
+    let process = system.processes_by_exact_name("fm-server".as_ref()).next();
     process.is_some()
 }

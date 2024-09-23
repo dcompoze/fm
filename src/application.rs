@@ -23,7 +23,7 @@ use crossterm::terminal::{
     LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute, ExecutableCommand};
-use fs4::FileExt;
+use fs4::fs_std::FileExt;
 use log::{error, info, warn};
 use prost::Message;
 use tui::backend::CrosstermBackend;

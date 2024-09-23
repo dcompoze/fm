@@ -1334,11 +1334,13 @@ impl<'a> Application<'a> {
         child.wait()?;
         //let path = String::from_utf8_lossy(&output.stdout);
         let contents = fs::read_to_string("/tmp/fm-search-all")?;
-        let path = PathBuf::from(contents);
-        if path.is_dir() {
-            self.jump_root(path)?;
-        } else {
-            self.editx_path(path);
+        if !contents.is_empty() {
+            let path = PathBuf::from(contents);
+            if path.is_dir() {
+                self.jump_root(path)?;
+            } else {
+                self.editx_path(path);
+            }
         }
         self.cmd_post();
         Ok(())

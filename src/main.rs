@@ -448,6 +448,9 @@ async fn main() -> Result<()> {
                     (KeyCode::Char('V'), KeyModifiers::SHIFT) => {
                         app.vscode();
                     }
+                    (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+                        app.vscode_root();
+                    }
                     (KeyCode::Char('T'), KeyModifiers::SHIFT) => {
                         app.trash();
                     }

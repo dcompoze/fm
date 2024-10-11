@@ -1347,6 +1347,16 @@ impl<'a> Application<'a> {
     }
 
     pub fn vscode(&self) {
+        if let Some(selected) = self.selected() {
+            let mut child = process::Command::new("vscode.default")
+                .arg(selected.path)
+                .spawn()
+                .expect("failed to execute process");
+            child.wait().expect("child process failed");
+        }
+    }
+
+    pub fn vscode_root(&self) {
         let mut child = process::Command::new("vscode.default")
             .arg(self.files.path.clone())
             .spawn()

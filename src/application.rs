@@ -15,12 +15,7 @@ use crossterm::event::MouseButton::{Left, Middle, Right};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::style::{self, ResetColor, Stylize};
 use crossterm::terminal::{
-    disable_raw_mode,
-    enable_raw_mode,
-    Clear,
-    ClearType,
-    EnterAlternateScreen,
-    LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute, ExecutableCommand};
 use fs4::fs_std::FileExt;
@@ -78,7 +73,12 @@ impl CommandBar {
 }
 
 impl<'a> Application<'a> {
-    pub fn new(terminal: &'a mut CrossTerminal, config: Config, root: File, sender: Sender<()>) -> Self {
+    pub fn new(
+        terminal: &'a mut CrossTerminal,
+        config: Config,
+        root: File,
+        sender: Sender<()>,
+    ) -> Self {
         let mut state = ListState::default();
         state.select(Some(0));
         Application {
@@ -136,7 +136,8 @@ impl<'a> Application<'a> {
             git_modules = modules.clone();
         }
         let frame_width = self.terminal.get_frame().size().width as usize;
-        let files: Vec<ListItem> = self.item_list(0, frame_width, &git_modules, &self.configuration)?;
+        let files: Vec<ListItem> =
+            self.item_list(0, frame_width, &git_modules, &self.configuration)?;
         let pathbar = self.pathbar()?;
         let statusbar = self.statusbar(
             size.width as usize,
@@ -362,7 +363,10 @@ impl<'a> Application<'a> {
                         format!("{}  ", self.configuration.style.directory.icon),
                         Style::default().fg(Color::Cyan),
                     ),
-                    Span::styled(format!("{}  ", module_count), Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        format!("{}  ", module_count),
+                        Style::default().fg(Color::Cyan),
+                    ),
                 ]);
             }
             let link_target_span = self.status_link_target();
@@ -433,7 +437,10 @@ impl<'a> Application<'a> {
         if output.is_empty() {
             Spans::from("")
         } else {
-            Spans::from(vec![Span::styled(format!("  {}  ", output), Style::default())])
+            Spans::from(vec![Span::styled(
+                format!("  {}  ", output),
+                Style::default(),
+            )])
         }
     }
 
@@ -449,7 +456,10 @@ impl<'a> Application<'a> {
         if output.is_empty() {
             Spans::from("")
         } else {
-            Spans::from(vec![Span::styled(format!("  {}  ", output), Style::default())])
+            Spans::from(vec![Span::styled(
+                format!("  {}  ", output),
+                Style::default(),
+            )])
         }
     }
 
@@ -470,10 +480,22 @@ impl<'a> Application<'a> {
                     format!("{} ", status_lines[0].clone()),
                     Style::default().fg(Color::Green),
                 ),
-                Span::styled(status_lines[1].clone() + " ", Style::default().fg(Color::Magenta)),
-                Span::styled(status_lines[2].clone() + " ", Style::default().fg(Color::Green)),
-                Span::styled(status_lines[3].clone() + " ", Style::default().fg(Color::Yellow)),
-                Span::styled(status_lines[4].clone() + "  ", Style::default().fg(Color::Red)),
+                Span::styled(
+                    status_lines[1].clone() + " ",
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(
+                    status_lines[2].clone() + " ",
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    status_lines[3].clone() + " ",
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(
+                    status_lines[4].clone() + "  ",
+                    Style::default().fg(Color::Red),
+                ),
             ])
         } else if status_lines.len() == 2 {
             Spans::from(vec![
@@ -482,7 +504,10 @@ impl<'a> Application<'a> {
                     format!("{} ", status_lines[0].clone()),
                     Style::default().fg(Color::Green),
                 ),
-                Span::styled(status_lines[1].clone() + "  ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    status_lines[1].clone() + "  ",
+                    Style::default().fg(Color::Yellow),
+                ),
             ])
         } else if status_lines.len() == 1 {
             Spans::from(vec![
@@ -531,21 +556,26 @@ impl<'a> Application<'a> {
     }
 
     pub fn down(&mut self) {
-        self.list_state.select(self.list_state.selected().map(|index| {
-            if (index + 1) >= (self.files.count() - 1) as usize {
-                return index;
-            }
-            index + 1
-        }));
+        self.list_state
+            .select(self.list_state.selected().map(|index| {
+                if (index + 1) >= (self.files.count() - 1) as usize {
+                    return index;
+                }
+                index + 1
+            }));
     }
 
     pub fn up(&mut self) {
-        self.list_state
-            .select(self.list_state.selected().map(|index| index.saturating_sub(1)));
+        self.list_state.select(
+            self.list_state
+                .selected()
+                .map(|index| index.saturating_sub(1)),
+        );
     }
 
     pub fn bottom(&mut self) {
-        self.list_state.select(Some(self.files.count() as usize - 2));
+        self.list_state
+            .select(Some(self.files.count() as usize - 2));
     }
 
     pub fn top(&mut self) {
@@ -645,7 +675,8 @@ impl<'a> Application<'a> {
             if selected.metadata.is_dir() {
                 env::set_current_dir(selected.path.clone());
                 self.updater.send(())?;
-                let root = Application::read_dir(selected.path.clone(), self.configuration.show_hidden)?;
+                let root =
+                    Application::read_dir(selected.path.clone(), self.configuration.show_hidden)?;
                 self.files = root;
                 if selected.is_empty() {
                     self.list_state.select(None);
@@ -927,10 +958,11 @@ impl<'a> Application<'a> {
                     .expect("failed to execute process");
                 child.wait().expect("child process failed");
             } else if let Some(parent) = selected.path.parent() {
-                let child = process::Command::new("fm-cmd-mv")
+                let mut child = process::Command::new("fm-cmd-mv")
                     .arg(parent)
                     .spawn()
                     .expect("failed to execute process");
+                child.wait().expect("child process failed");
             }
         } else {
             let mut child = process::Command::new("fm-cmd-mv")
@@ -1428,7 +1460,10 @@ impl<'a> Application<'a> {
             let metadata_extra = match fs::symlink_metadata(entry.path()) {
                 Err(error) => match error.kind() {
                     ErrorKind::NotFound => {
-                        error!("could not read file symlink metadata: {}", entry.path().display());
+                        error!(
+                            "could not read file symlink metadata: {}",
+                            entry.path().display()
+                        );
                         continue;
                     }
                     _ => return Err(error.into()),
@@ -1573,12 +1608,17 @@ impl<'a> Application<'a> {
 
         file_handle.write_all(cut_path.as_bytes())?;
         file_handle.sync_all()?;
+        #[allow(unstable_name_collisions)]
         file_handle.unlock()?;
         Ok(())
     }
 }
 
-fn find_target_file<'a>(file: &'a mut File, current: &mut usize, target: usize) -> Option<&'a mut File> {
+fn find_target_file<'a>(
+    file: &'a mut File,
+    current: &mut usize,
+    target: usize,
+) -> Option<&'a mut File> {
     if *current == target {
         return Some(file);
     }
@@ -1593,7 +1633,10 @@ fn find_target_file<'a>(file: &'a mut File, current: &mut usize, target: usize) 
     None
 }
 
-fn send_server_request(client: &mut UnixStream, request: &proto::Request) -> Result<proto::Response, Error> {
+fn send_server_request(
+    client: &mut UnixStream,
+    request: &proto::Request,
+) -> Result<proto::Response, Error> {
     let mut request_buffer = Vec::with_capacity(request.encoded_len());
     request
         .encode(&mut request_buffer)

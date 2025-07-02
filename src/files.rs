@@ -135,6 +135,29 @@ impl File {
         self.metadata.is_dir() && fs::read_dir(&self.path).expect("could not read dir").count() == 0
     }
 
+    fn format_file_size(size: u64) -> String {
+        if size < 1024 {
+            format!("{}", size)
+        } else {
+            let units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+            let mut size_f = size as f64 / 1024.0;
+            let mut unit_index = 0;
+            
+            while size_f >= 1024.0 && unit_index < units.len() - 1 {
+                size_f /= 1024.0;
+                unit_index += 1;
+            }
+            
+            if size_f >= 100.0 {
+                format!("{:.0} {}", size_f, units[unit_index])
+            } else if size_f >= 10.0 {
+                format!("{:.1} {}", size_f, units[unit_index])
+            } else {
+                format!("{:.2} {}", size_f, units[unit_index])
+            }
+        }
+    }
+
     pub fn info_count<'a>(&self) -> Result<Span<'a>, Error> {
         if self.metadata.is_dir() {
             let mut count = 0;
@@ -155,7 +178,7 @@ impl File {
                 Style::default().fg(Color::Blue),
             ))
         } else {
-            Ok(Span::styled(format!("{}", self.metadata.len()), Style::default()))
+            Ok(Span::styled(Self::format_file_size(self.metadata.len()), Style::default()))
         }
     }
 

@@ -21,28 +21,13 @@ use config::Config;
 use crossterm::cursor::{position, Hide};
 use crossterm::event::MouseButton::{Left, Middle, Right};
 use crossterm::event::{
-    poll,
-    read,
-    DisableMouseCapture,
-    EnableMouseCapture,
-    Event,
-    KeyCode,
-    KeyEvent,
-    KeyModifiers,
-    ModifierKeyCode,
-    MouseEvent,
-    MouseEventKind,
+    poll, read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    ModifierKeyCode, MouseEvent, MouseEventKind,
 };
 use crossterm::style::{self, ResetColor, Stylize};
 use crossterm::terminal::{
-    disable_raw_mode,
-    enable_raw_mode,
-    Clear,
-    ClearType,
-    EnterAlternateScreen,
-    LeaveAlternateScreen,
-    ScrollDown,
-    ScrollUp,
+    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
+    LeaveAlternateScreen, ScrollDown, ScrollUp,
 };
 use crossterm::tty::IsTty;
 use crossterm::{cursor, execute, queue, terminal, ExecutableCommand, QueueableCommand};
@@ -120,7 +105,12 @@ async fn main() -> Result<()> {
                 .action(ArgAction::Set)
                 .required(false),
         )
-        .arg(Arg::new("dir").help("Directory to open").required(false).index(1))
+        .arg(
+            Arg::new("dir")
+                .help("Directory to open")
+                .required(false)
+                .index(1),
+        )
         .get_matches();
 
     // Get useful system information.
@@ -363,7 +353,9 @@ async fn main() -> Result<()> {
                     MouseEventKind::ScrollLeft => {}
                     MouseEventKind::ScrollRight => {}
                 },
-                Event::Key(KeyEvent { code, modifiers, .. }) => match (code, modifiers) {
+                Event::Key(KeyEvent {
+                    code, modifiers, ..
+                }) => match (code, modifiers) {
                     (KeyCode::Char(':'), KeyModifiers::NONE) => {
                         app.command_bar.command_entry_mode = true;
                     }
@@ -385,9 +377,13 @@ async fn main() -> Result<()> {
                     (KeyCode::Char('h'), KeyModifiers::NONE) => {
                         if let Some(output_path) = cmd.get_one::<String>("file-chooser-dir") {
                             app.quit_print_dir(output_path.clone())?;
-                        } else if let Some(output_path) = cmd.get_one::<String>("file-chooser-single") {
+                        } else if let Some(output_path) =
+                            cmd.get_one::<String>("file-chooser-single")
+                        {
                             app.quit_print_file(output_path.clone())?;
-                        } else if let Some(output_path) = cmd.get_one::<String>("file-chooser-multiple") {
+                        } else if let Some(output_path) =
+                            cmd.get_one::<String>("file-chooser-multiple")
+                        {
                             app.quit_print_marked(output_path.clone())?;
                         }
                     }
@@ -570,7 +566,8 @@ macro_rules! dbgf {
 }
 
 fn is_server_running() -> bool {
-    let system = System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let system =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
     let process = system.processes_by_exact_name("fm-server".as_ref()).next();
     process.is_some()
 }

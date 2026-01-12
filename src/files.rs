@@ -132,7 +132,7 @@ pub fn apply_to_all<'a>(
 
 impl File {
     pub fn is_empty(&self) -> bool {
-        self.metadata.is_dir() && fs::read_dir(&self.path).expect("could not read dir").count() == 0
+        self.metadata.is_dir() && fs::read_dir(&self.path).map(|d| d.count() == 0).unwrap_or(false)
     }
 
     fn format_file_size(size: u64) -> String {
@@ -182,7 +182,7 @@ impl File {
         }
     }
 
-    pub fn iter(&self) -> FileIteratorRef {
+    pub fn iter(&self) -> FileIteratorRef<'_> {
         FileIteratorRef::new(self)
     }
 
@@ -269,47 +269,48 @@ fn count_files(file: &File, count: &mut u32) {
 
 fn git_modified<'a>(file: Box<File>) -> Result<Span<'a>, Error> {
     if let Ok(repo) = Repository::open(".") {
-        let repo_path = repo.path().parent().expect("failed to read repo path");
-        let submodule_path = file
-            .path
-            .strip_prefix(repo_path)
-            .expect("failed to strip prefix on repo path");
-        if let Ok(submodule) = repo.find_submodule(&submodule_path.to_string_lossy()) {
-            return Ok(Span::styled(" S", Style::default().fg(Color::Cyan)))
+        if let Some(repo_path) = repo.path().parent() {
+            if let Ok(submodule_path) = file.path.strip_prefix(repo_path) {
+                if repo.find_submodule(&submodule_path.to_string_lossy()).is_ok() {
+                    return Ok(Span::styled(" S", Style::default().fg(Color::Cyan)));
+                }
+            }
         }
     } else {
-        return Ok(Span::raw(""))
+        return Ok(Span::raw(""));
     }
 
     // Check if file is a submodule.
-    let output = process::Command::new("fm-git-submodule")
+    if let Ok(output) = process::Command::new("fm-git-submodule")
         .arg(file.path.clone())
         .output()
-        .expect("failed to execute command");
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-
-    if output_str == " S" {
-        return Ok(Span::styled(" S", Style::default().fg(Color::Cyan)))
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        if output_str == " S" {
+            return Ok(Span::styled(" S", Style::default().fg(Color::Cyan)));
+        }
     }
+
     // Check git file status.
-    let output = process::Command::new("fm-git-status")
+    if let Ok(output) = process::Command::new("fm-git-status")
         .arg(file.path.clone())
         .output()
-        .expect("failed to execute command");
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    if output_str.is_empty() {
-        Ok(Span::styled("", Style::default().fg(Color::Yellow)))
-    } else if output_str.eq("U") {
-        Ok(Span::styled(
-            format!(" {}", output_str),
-            Style::default().fg(Color::Red),
-        ))
-    } else {
-        Ok(Span::styled(
-            format!(" {}", output_str),
-            Style::default().fg(Color::Yellow),
-        ))
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        if output_str.is_empty() {
+            return Ok(Span::styled("", Style::default().fg(Color::Yellow)));
+        } else if output_str.eq("U") {
+            return Ok(Span::styled(
+                format!(" {}", output_str),
+                Style::default().fg(Color::Red),
+            ));
+        } else {
+            return Ok(Span::styled(
+                format!(" {}", output_str),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
     }
+
+    Ok(Span::raw(""))
 }

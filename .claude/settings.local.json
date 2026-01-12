@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(pacman -Sy:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo clean:*)",
+      "Bash(./target/release/fm:*)",
+      "Bash(cargo update --dry-run)"
+    ]
+  }
+}

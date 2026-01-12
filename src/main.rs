@@ -46,6 +46,7 @@ use tui::{Frame, Terminal};
 
 mod application;
 mod config;
+pub(crate) mod error;
 pub(crate) mod files;
 
 #[cfg(test)]

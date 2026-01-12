@@ -35,6 +35,7 @@ log = "0.4.22"
 prost = "0.13.3"
 prost-types = "0.13.3"
 serde = { version = "1.0.210", features = ["derive"] }
+thiserror = "1.0"
 subprocess = "0.2.9"
 sysinfo = "0.31.4"
 tokio = { version = "1.40.0", features = ["full"] }

@@ -15,7 +15,14 @@ mod proto {
     include!("../proto/server.rs");
 }
 
-const SOCKET_PATH: &str = "/tmp/fm.sock";
+/// Get the socket path, using XDG_RUNTIME_DIR if available.
+fn get_socket_path() -> PathBuf {
+    if let Some(runtime_dir) = dirs::runtime_dir() {
+        runtime_dir.join("fm.sock")
+    } else {
+        PathBuf::from("/tmp/fm.sock")
+    }
+}
 
 /// Cleans up the socket file using RAII (only works on normal exit).
 struct SocketCleanup {
@@ -37,12 +44,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let copied = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
 
     // Handle socket cleanup.
-    let _ = fs::remove_file(SOCKET_PATH);
+    let socket_path = get_socket_path();
+    let _ = fs::remove_file(&socket_path);
     let _cleanup = SocketCleanup {
-        path: SOCKET_PATH.into(),
+        path: socket_path.clone(),
     };
 
-    let listener = UnixListener::bind(SOCKET_PATH)?;
+    let listener = UnixListener::bind(&socket_path)?;
 
     loop {
         let (stream, _) = listener.accept().await?;

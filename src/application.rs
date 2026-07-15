@@ -27,10 +27,150 @@ use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use tui::Terminal;
+use unicode_width::UnicodeWidthStr;
 
 use crate::{dbgf, files, proto, Config, File};
 
+/// Get the socket path, using XDG_RUNTIME_DIR if available.
+pub fn get_socket_path() -> PathBuf {
+    if let Some(runtime_dir) = dirs::runtime_dir() {
+        runtime_dir.join("fm.sock")
+    } else {
+        PathBuf::from("/tmp/fm.sock")
+    }
+}
+
+/// For backwards compatibility
 pub const SOCKET_PATH: &str = "/tmp/fm.sock";
+
+/// Get the user's home directory prefix for display purposes.
+fn get_home_prefix() -> String {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/home/".to_string())
+}
+
+/// Get the fm data directory.
+fn get_fm_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".local/share")
+        })
+        .join("fm")
+}
+
+/// File type for styling purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileType {
+    Symlink,
+    Video,
+    Audio,
+    Image,
+    Archive,
+    Document,
+    Directory,
+    GitModule,
+    Executable,
+    Regular,
+}
+
+impl FileType {
+    /// Determine the file type from a File struct.
+    pub fn from_file(file: &File, git_modules: &HashSet<PathBuf>) -> Self {
+        if file.metadata_extra.is_symlink() {
+            FileType::Symlink
+        } else if file.is_video() {
+            FileType::Video
+        } else if file.is_audio() {
+            FileType::Audio
+        } else if file.is_image() {
+            FileType::Image
+        } else if file.is_archive() {
+            FileType::Archive
+        } else if file.is_document() {
+            FileType::Document
+        } else if file.metadata.is_dir() {
+            if git_modules.contains(&file.path) {
+                FileType::GitModule
+            } else {
+                FileType::Directory
+            }
+        } else if file.is_executable() {
+            FileType::Executable
+        } else {
+            FileType::Regular
+        }
+    }
+
+    /// Get the color for this file type.
+    pub fn color(&self) -> Color {
+        match self {
+            FileType::Symlink => Color::Cyan,
+            FileType::Video => Color::Magenta,
+            FileType::Audio => Color::Cyan,
+            FileType::Image => Color::Magenta,
+            FileType::Archive => Color::Red,
+            FileType::Document => Color::White,
+            FileType::Directory => Color::Blue,
+            FileType::GitModule => Color::Cyan,
+            FileType::Executable => Color::Green,
+            FileType::Regular => Color::Reset,
+        }
+    }
+
+    /// Get the icon for this file type from config.
+    pub fn icon<'a>(&self, config: &'a Config) -> &'a str {
+        match self {
+            FileType::Symlink => &config.style.link.icon,
+            FileType::Video => &config.style.video.icon,
+            FileType::Audio => &config.style.audio.icon,
+            FileType::Image => &config.style.image.icon,
+            FileType::Archive => &config.style.archive.icon,
+            FileType::Document => &config.style.document.icon,
+            FileType::Directory => &config.style.directory.icon,
+            FileType::GitModule => &config.style.directory.icon,
+            FileType::Executable => &config.style.file.icon,
+            FileType::Regular => &config.style.file.icon,
+        }
+    }
+}
+
+/// Run an external command and wait for it to complete.
+/// Returns Ok(()) on success, or an error with details on failure.
+fn run_command(command: &str, args: &[&OsStr]) -> Result<()> {
+    let mut child = process::Command::new(command)
+        .args(args)
+        .spawn()
+        .map_err(|e| anyhow!("Failed to execute '{}': {}", command, e))?;
+
+    let status = child
+        .wait()
+        .map_err(|e| anyhow!("Failed to wait for '{}': {}", command, e))?;
+
+    if !status.success() {
+        return Err(anyhow!(
+            "Command '{}' failed with exit code {:?}",
+            command,
+            status.code()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Run an external command with string arguments.
+fn run_command_with_strings(command: &str, args: &[&str]) -> Result<()> {
+    let os_args: Vec<&OsStr> = args.iter().map(|s| OsStr::new(*s)).collect();
+    run_command(command, &os_args)
+}
+
+/// Run an external command with PathBuf arguments.
+fn run_command_with_paths(command: &str, args: &[PathBuf]) -> Result<()> {
+    let os_args: Vec<&OsStr> = args.iter().map(|p| p.as_os_str()).collect();
+    run_command(command, &os_args)
+}
 
 type CrossTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -232,77 +372,29 @@ impl<'a> Application<'a> {
                     .file_name()
                     .ok_or(anyhow!("invalid path"))?
                     .to_string_lossy();
-                let icon_width = 3;
-                let item_pad_width = frame_width
-                    - (icon_width
+
+                // Use FileType enum to determine styling
+                let file_type = FileType::from_file(descendant, git_modules);
+                let color = file_type.color();
+                let icon = file_type.icon(config);
+
+                let item_text = format!("{}  {}", icon, item_name);
+                let item_pad_width = frame_width.saturating_sub(
+                    item_text.width()
                         + indent_span.width()
-                        + item_name.len()
                         + separator_span.width()
                         + mark_span.width()
                         + separator_span.width()
-                        + count_span.width()); // TODO: What if frame has not enough space.
+                        + count_span.width(),
+                );
                 let item_pad_span = Span::raw(format!("{:<item_pad_width$}", " "));
-                let item_span: Span;
-                if descendant.metadata_extra.is_symlink() {
-                    count_span.style = Style::default().fg(Color::Cyan);
-                    item_span = Span::styled(
-                        format!("{}  {}", config.style.link.icon, item_name),
-                        Style::default().fg(Color::Cyan),
-                    );
-                } else if descendant.is_video() {
-                    count_span.style = Style::default().fg(Color::Magenta);
-                    item_span = Span::styled(
-                        format!("{}  {}", config.style.video.icon, item_name),
-                        Style::default().fg(Color::Magenta),
-                    );
-                } else if descendant.is_audio() {
-                    count_span.style = Style::default().fg(Color::Cyan);
-                    item_span = Span::styled(
-                        format!("{}  {}", config.style.audio.icon, item_name),
-                        Style::default().fg(Color::Cyan),
-                    );
-                } else if descendant.is_image() {
-                    count_span.style = Style::default().fg(Color::Magenta);
-                    item_span = Span::styled(
-                        format!("{}  {}", config.style.image.icon, item_name),
-                        Style::default().fg(Color::Magenta),
-                    );
-                } else if descendant.is_archive() {
-                    count_span.style = Style::default().fg(Color::Red);
-                    item_span = Span::styled(
-                        format!("{}  {}", config.style.archive.icon, item_name),
-                        Style::default().fg(Color::Red),
-                    );
-                } else if descendant.is_document() {
-                    count_span.style = Style::default().fg(Color::White);
-                    item_span = Span::styled(
-                        format!("{}  {}", config.style.document.icon, item_name),
-                        Style::default().fg(Color::White),
-                    );
-                } else if descendant.metadata.is_dir() {
-                    if git_modules.contains(&descendant.path) {
-                        count_span.style = Style::default().fg(Color::Cyan);
-                        item_span = Span::styled(
-                            format!("{}  {}", config.style.directory.icon, item_name),
-                            Style::default().fg(Color::Cyan),
-                        );
-                    } else {
-                        count_span.style = Style::default().fg(Color::Blue);
-                        item_span = Span::styled(
-                            format!("{}  {}", config.style.directory.icon, item_name),
-                            Style::default().fg(Color::Blue),
-                        );
-                    }
-                } else if descendant.is_executable() {
-                    count_span.style = Style::default().fg(Color::Green);
-                    item_span = Span::styled(
-                        format!("{}  {}", config.style.file.icon, item_name),
-                        Style::default().fg(Color::Green),
-                    );
+
+                count_span.style = Style::default().fg(color);
+                let item_span = if color == Color::Reset {
+                    Span::raw(item_text)
                 } else {
-                    count_span.style = Style::default();
-                    item_span = Span::raw(format!("{}  {}", config.style.file.icon, item_name));
-                }
+                    Span::styled(item_text, Style::default().fg(color))
+                };
                 let list_item = Spans::from(vec![
                     item_span,
                     separator_span.clone(),
@@ -415,7 +507,10 @@ impl<'a> Application<'a> {
         let icon = "  ";
         if let Some(selected) = self.selected() {
             if selected.metadata_extra.is_symlink() {
-                let target = fs::read_link(selected.path).expect("could not read link");
+                let target = match fs::read_link(&selected.path) {
+                    Ok(t) => t,
+                    Err(_) => return Span::styled("", Style::default()),
+                };
                 return Span::styled(
                     format!("{}{}  ", icon, target.to_string_lossy()),
                     Style::default(),
@@ -524,7 +619,8 @@ impl<'a> Application<'a> {
 
     pub fn selected(&self) -> Option<File> {
         let selected = self.list_state.selected()?;
-        self.files.clone().into_iter().nth(selected + 1)
+        // Use iter() to avoid cloning the entire tree, only clone the selected file
+        self.files.iter().nth(selected + 1).cloned()
     }
 
     pub fn marked(&self) -> Vec<PathBuf> {
@@ -541,7 +637,7 @@ impl<'a> Application<'a> {
         let path = env::current_dir()?;
         let path = path
             .to_string_lossy()
-            .replacen("/home/admin/", "/", 1)
+            .replacen(&format!("{}/", get_home_prefix()), "/", 1)
             .replacen('/', "  ", 1)
             .replace('/', "    ");
         let pathbar = Paragraph::new(vec![Spans::from(vec![
@@ -600,10 +696,15 @@ impl<'a> Application<'a> {
         let show_hidden = self.configuration.show_hidden;
         if let Some(selected) = self.selected_mut() {
             if selected.metadata.is_dir() {
-                let root = Application::read_dir(selected.path.clone(), show_hidden)
-                    .expect("could not read directory");
-                *selected = root;
-                expanded = Some(selected.path.clone());
+                match Application::read_dir(selected.path.clone(), show_hidden) {
+                    Ok(root) => {
+                        *selected = root;
+                        expanded = Some(selected.path.clone());
+                    }
+                    Err(e) => {
+                        error!("Could not read directory: {}", e);
+                    }
+                }
             }
         }
         if let Some(path) = expanded {
@@ -622,28 +723,33 @@ impl<'a> Application<'a> {
     }
 
     pub fn refresh(&mut self) {
-        self.synchronize().expect("synchronization failed");
-        self.updater.send(()).expect("could not send to a channel");
-        if let Some(selected) = self.list_state.selected() {
-            // Re-read the whole tree at current root.
-            self.files = self
-                .read_tree(self.files.path.clone())
-                .expect("could not refresh");
-            // If there are no files left, select nothing.
-            // If the last file was deleted, select the new last file.
-            let count = self.files.count();
-            if count <= 1 {
-                self.list_state.select(None);
-            } else if selected > (count - 2) as usize {
-                self.list_state.select(Some((count - 2) as usize));
+        if let Err(e) = self.synchronize() {
+            error!("Synchronization failed: {}", e);
+        }
+        if let Err(e) = self.updater.send(()) {
+            error!("Could not send to channel: {}", e);
+        }
+
+        let tree_result = self.read_tree(self.files.path.clone());
+        match tree_result {
+            Ok(new_files) => {
+                self.files = new_files;
+                let count = self.files.count();
+
+                if let Some(selected) = self.list_state.selected() {
+                    // If there are no files left, select nothing.
+                    // If the last file was deleted, select the new last file.
+                    if count <= 1 {
+                        self.list_state.select(None);
+                    } else if selected > (count - 2) as usize {
+                        self.list_state.select(Some((count - 2) as usize));
+                    }
+                } else if count > 1 {
+                    self.list_state.select(Some(0));
+                }
             }
-        } else {
-            self.files = self
-                .read_tree(self.files.path.clone())
-                .expect("could not refresh");
-            let count = self.files.count();
-            if count > 1 {
-                self.list_state.select(Some(0));
+            Err(e) => {
+                error!("Could not refresh file tree: {}", e);
             }
         }
     }
@@ -728,64 +834,38 @@ impl<'a> Application<'a> {
         }
     }
 
-    pub fn new_dir(&mut self, name: String) {
+    /// Get the target directory for file operations.
+    /// Returns the selected directory, or the parent of the selected file,
+    /// or the root directory if nothing is selected.
+    fn get_target_directory(&self) -> PathBuf {
         if let Some(selected) = self.selected() {
             if selected.metadata.is_dir() {
-                let mut child = process::Command::new("fm-new-dir")
-                    .arg(selected.path)
-                    .arg(name)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-                self.refresh();
-            } else if let Some(parent) = selected.path.parent() {
-                let mut child = process::Command::new("fm-new-dir")
-                    .arg(parent)
-                    .arg(name)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-                self.refresh();
+                selected.path.clone()
+            } else {
+                selected.path.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| self.files.path.clone())
             }
         } else {
-            let mut child = process::Command::new("fm-new-dir")
-                .arg(self.files.path.clone())
-                .arg(name)
-                .spawn()
-                .expect("failed to execute process");
-            child.wait().expect("child process failed");
-            self.refresh();
+            self.files.path.clone()
         }
     }
 
-    pub fn new_file(&mut self, name: String) {
-        if let Some(selected) = self.selected() {
-            if selected.metadata.is_dir() {
-                let mut child = process::Command::new("fm-new-file")
-                    .arg(selected.path)
-                    .arg(name)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-                self.refresh();
-            } else if let Some(parent) = selected.path.parent() {
-                let mut child = process::Command::new("fm-new-file")
-                    .arg(parent)
-                    .arg(name)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-                self.refresh();
-            }
-        } else {
-            let mut child = process::Command::new("fm-new-file")
-                .arg(self.files.path.clone())
-                .arg(name)
-                .spawn()
-                .expect("failed to execute process");
-            child.wait().expect("child process failed");
-            self.refresh();
+    /// Create a new item (file or directory) with the given command.
+    fn create_item(&mut self, command: &str, name: String) {
+        let target_dir = self.get_target_directory();
+        if let Err(e) = run_command_with_paths(command, &[target_dir, name.into()]) {
+            error!("Failed to create item: {}", e);
         }
+        self.refresh();
+    }
+
+    pub fn new_dir(&mut self, name: String) {
+        self.create_item("fm-new-dir", name);
+    }
+
+    pub fn new_file(&mut self, name: String) {
+        self.create_item("fm-new-file", name);
     }
 
     pub fn copy(&mut self) {
@@ -930,173 +1010,95 @@ impl<'a> Application<'a> {
     }
 
     pub fn cmd_shell(&mut self, command: String) {
-        let mut child = process::Command::new("zsh")
-            .arg("-c")
-            .arg(command)
-            .spawn()
-            .expect("failed to execute child process");
-        child.wait().expect("shell command failed");
+        // Use configured shell or fall back to defaults
+        let (shell, shell_args) = if !self.configuration.shell.is_empty() {
+            let shell = &self.configuration.shell[0];
+            let args: Vec<&str> = self.configuration.shell[1..].iter().map(|s| s.as_str()).collect();
+            (shell.as_str(), args)
+        } else {
+            ("sh", vec!["-c"])
+        };
+
+        let mut cmd = process::Command::new(shell);
+        for arg in &shell_args {
+            cmd.arg(arg);
+        }
+        cmd.arg(&command);
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                if let Err(e) = child.wait() {
+                    error!("Shell command failed: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Failed to execute shell '{}': {}", shell, e);
+            }
+        }
         self.refresh();
     }
 
     pub fn cmd_path(&self) {
         if let Some(selected) = self.selected() {
-            let mut child = process::Command::new("fm-cmd-path")
-                .arg(selected.path)
-                .spawn()
-                .expect("failed to execute process");
-            child.wait().expect("child process failed");
+            if let Err(e) = run_command_with_paths("fm-cmd-path", &[selected.path]) {
+                error!("cmd_path failed: {}", e);
+            }
         }
+    }
+
+    /// Run a command with the target directory as argument.
+    fn run_with_target_dir(&mut self, command: &str) {
+        let target = self.get_target_directory();
+        if let Err(e) = run_command_with_paths(command, &[target]) {
+            error!("{} failed: {}", command, e);
+        }
+        self.refresh();
     }
 
     pub fn cmd_mv(&mut self) {
-        if let Some(selected) = self.selected() {
-            if selected.metadata.is_dir() {
-                let mut child = process::Command::new("fm-cmd-mv")
-                    .arg(selected.path)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-            } else if let Some(parent) = selected.path.parent() {
-                let mut child = process::Command::new("fm-cmd-mv")
-                    .arg(parent)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-            }
-        } else {
-            let mut child = process::Command::new("fm-cmd-mv")
-                .arg(self.files.path.clone())
-                .spawn()
-                .expect("failed to execute process");
-            child.wait().expect("child process failed");
-        }
-        self.refresh();
+        self.run_with_target_dir("fm-cmd-mv");
     }
 
     pub fn cmd_cp(&mut self) {
-        if let Some(selected) = self.selected() {
-            if selected.metadata.is_dir() {
-                let mut child = process::Command::new("fm-cmd-cp")
-                    .arg(selected.path)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-            } else if let Some(parent) = selected.path.parent() {
-                let mut child = process::Command::new("fm-cmd-cp")
-                    .arg(parent)
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-            }
-        } else {
-            let mut child = process::Command::new("fm-cmd-cp")
-                .arg(self.files.path.clone())
-                .spawn()
-                .expect("failed to execute process");
-            child.wait().expect("child process failed");
+        self.run_with_target_dir("fm-cmd-cp");
+    }
+
+    /// Get the paste destination directory.
+    fn get_paste_destination(&self, root: bool) -> PathBuf {
+        if root {
+            return self.files.path.clone();
         }
-        self.refresh();
+        self.get_target_directory()
+    }
+
+    /// Execute paste operations for a set of files.
+    fn execute_paste(&self, operation: &str, files: &HashSet<PathBuf>, destination: &Path) {
+        for path in files.iter() {
+            if let Err(e) = run_command_with_strings(
+                "fm-paste",
+                &[operation, &path.to_string_lossy(), &destination.to_string_lossy()],
+            ) {
+                error!("Paste operation failed: {}", e);
+            }
+        }
     }
 
     pub fn paste(&mut self, root: bool) {
-        // When something is selected in the file list.
-        if let Some(selected) = self.selected() {
-            // Pate to root directory if this option was chosen.
-            if root {
-                self.synchronize().expect("synchronization failed");
-                for path in self.copied.iter() {
-                    let mut child = process::Command::new("fm-paste")
-                        .arg("copy")
-                        .arg(path.clone())
-                        .arg(self.files.path.clone())
-                        .spawn()
-                        .expect("failed to execute process");
-                    child.wait().expect("child process failed");
-                }
-                for path in self.cut.iter() {
-                    let mut child = process::Command::new("fm-paste")
-                        .arg("cut")
-                        .arg(path.clone())
-                        .arg(self.files.path.clone())
-                        .spawn()
-                        .expect("failed to execute process");
-                    child.wait().expect("child process failed");
-                }
-                self.clear_files();
-                self.refresh();
-            // When directory is selected.
-            } else if selected.metadata.is_dir() {
-                self.synchronize().expect("synchronization failed");
-                for path in self.copied.iter() {
-                    let mut child = process::Command::new("fm-paste")
-                        .arg("copy")
-                        .arg(path.clone())
-                        .arg(selected.path.clone())
-                        .spawn()
-                        .expect("failed to execute process");
-                    child.wait().expect("child process failed");
-                }
-                for path in self.cut.iter() {
-                    let mut child = process::Command::new("fm-paste")
-                        .arg("cut")
-                        .arg(path.clone())
-                        .arg(selected.path.clone())
-                        .spawn()
-                        .expect("failed to execute process");
-                    child.wait().expect("child process failed");
-                }
-                self.clear_files();
-                self.refresh();
-            // When file is selected.
-            } else if let Some(parent) = selected.path.parent() {
-                self.synchronize().expect("synchronization failed");
-                for path in self.copied.iter() {
-                    let mut child = process::Command::new("fm-paste")
-                        .arg("copy")
-                        .arg(path.clone())
-                        .arg(parent)
-                        .spawn()
-                        .expect("failed to execute process");
-                    child.wait().expect("child process failed");
-                }
-                for path in self.cut.iter() {
-                    let mut child = process::Command::new("fm-paste")
-                        .arg("cut")
-                        .arg(path.clone())
-                        .arg(parent)
-                        .spawn()
-                        .expect("failed to execute process");
-                    child.wait().expect("child process failed");
-                }
-                self.clear_files();
-                self.refresh();
-            }
-        // When nothing is selected (in rare cases).
-        } else {
-            self.synchronize().expect("synchronization failed");
-            let current = &self.files.path;
-            for path in self.copied.iter() {
-                let mut child = process::Command::new("fm-paste")
-                    .arg("copy")
-                    .arg(path.clone())
-                    .arg(current.clone())
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-            }
-            for path in self.cut.iter() {
-                let mut child = process::Command::new("fm-paste")
-                    .arg("cut")
-                    .arg(path.clone())
-                    .arg(current.clone())
-                    .spawn()
-                    .expect("failed to execute process");
-                child.wait().expect("child process failed");
-            }
-            self.clear_files();
-            self.refresh();
+        if let Err(e) = self.synchronize() {
+            error!("Synchronization failed: {}", e);
+            return;
         }
+
+        let destination = self.get_paste_destination(root);
+
+        // Execute copy operations
+        self.execute_paste("copy", &self.copied.clone(), &destination);
+
+        // Execute cut operations
+        self.execute_paste("cut", &self.cut.clone(), &destination);
+
+        self.clear_files();
+        self.refresh();
     }
 
     pub fn clear(&self) {
@@ -1328,12 +1330,13 @@ impl<'a> Application<'a> {
     }
 
     pub fn search(&mut self, input: String) {
-        for (i, file) in self.files.clone().into_iter().enumerate() {
+        let input_lower = input.to_lowercase();
+        for (i, file) in self.files.iter().enumerate() {
             if let Some(name) = file.path.file_name() {
                 if name
                     .to_string_lossy()
                     .to_lowercase()
-                    .contains(&input.to_lowercase())
+                    .contains(&input_lower)
                 {
                     self.list_state.select(Some(i.saturating_sub(1)));
                     break;
@@ -1343,9 +1346,10 @@ impl<'a> Application<'a> {
     }
 
     pub fn search_exact(&mut self, input: String) {
-        for (i, file) in self.files.clone().into_iter().enumerate() {
+        let input_lower = input.to_lowercase();
+        for (i, file) in self.files.iter().enumerate() {
             if let Some(name) = file.path.file_name() {
-                if name.to_string_lossy().to_lowercase() == input.to_lowercase() {
+                if name.to_string_lossy().to_lowercase() == input_lower {
                     self.list_state.select(Some(i.saturating_sub(1)));
                     break;
                 }
@@ -1596,12 +1600,13 @@ impl<'a> Application<'a> {
     }
 
     pub fn save_cut_path(cut_path: String) -> Result<(), Error> {
-        let file_path = "/home/admin/.local/share/fm/cut";
+        let file_path = get_fm_data_dir().join("cut");
 
         let mut file_handle = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(file_path)?;
 
         file_handle.lock_exclusive()?;

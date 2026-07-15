@@ -27,6 +27,7 @@ use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use tui::Terminal;
+use unicode_width::UnicodeWidthStr;
 
 use crate::{dbgf, files, proto, Config, File};
 
@@ -371,30 +372,28 @@ impl<'a> Application<'a> {
                     .file_name()
                     .ok_or(anyhow!("invalid path"))?
                     .to_string_lossy();
-                let icon_width = 3;
-                let item_pad_width = frame_width
-                    - (icon_width
-                        + indent_span.width()
-                        + item_name.len()
-                        + separator_span.width()
-                        + mark_span.width()
-                        + separator_span.width()
-                        + count_span.width()); // TODO: What if frame has not enough space.
-                let item_pad_span = Span::raw(format!("{:<item_pad_width$}", " "));
 
                 // Use FileType enum to determine styling
                 let file_type = FileType::from_file(descendant, git_modules);
                 let color = file_type.color();
                 let icon = file_type.icon(config);
 
+                let item_text = format!("{}  {}", icon, item_name);
+                let item_pad_width = frame_width.saturating_sub(
+                    item_text.width()
+                        + indent_span.width()
+                        + separator_span.width()
+                        + mark_span.width()
+                        + separator_span.width()
+                        + count_span.width(),
+                );
+                let item_pad_span = Span::raw(format!("{:<item_pad_width$}", " "));
+
                 count_span.style = Style::default().fg(color);
                 let item_span = if color == Color::Reset {
-                    Span::raw(format!("{}  {}", icon, item_name))
+                    Span::raw(item_text)
                 } else {
-                    Span::styled(
-                        format!("{}  {}", icon, item_name),
-                        Style::default().fg(color),
-                    )
+                    Span::styled(item_text, Style::default().fg(color))
                 };
                 let list_item = Spans::from(vec![
                     item_span,

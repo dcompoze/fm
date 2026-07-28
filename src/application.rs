@@ -986,6 +986,10 @@ impl<'a> Application<'a> {
         }
     }
 
+    pub fn clipboard_client_id(&self) -> &str {
+        self.clipboard_clock.client_id()
+    }
+
     fn synchronize_inner(&mut self) -> Result<(), Error> {
         let has_pending = self.pending_clipboard.has_changes();
         let request = proto::Request {
@@ -1001,6 +1005,7 @@ impl<'a> Application<'a> {
                 .map(|item| item.to_proto())
                 .collect(),
             clear_timestamp: self.pending_clipboard.clear_timestamp().map(Into::into),
+            client_id: self.clipboard_client_id().to_owned(),
         };
         let response = send_clipboard_request(&request)?;
         let (items, clear_timestamp) = decode_clipboard_response(response)?;
@@ -1068,6 +1073,7 @@ impl<'a> Application<'a> {
             files: vec![],
             clipboard_items: vec![],
             clear_timestamp: None,
+            client_id: self.clipboard_client_id().to_owned(),
         };
         let response = send_clipboard_request(&request)?;
         let (items, clear_timestamp) = decode_clipboard_response(response)?;

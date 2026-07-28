@@ -193,6 +193,7 @@ async fn main() -> Result<()> {
     let (clipboard_notification_sender, mut clipboard_notifications) = tokio_mpsc::channel(1);
     task::spawn(clipboard_notification_listener(
         clipboard_notification_sender,
+        app.clipboard_client_id().to_owned(),
     ));
     let mut event_reader = EventStream::new();
 
@@ -565,7 +566,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn clipboard_notification_listener(sender: tokio_mpsc::Sender<()>) {
+async fn clipboard_notification_listener(sender: tokio_mpsc::Sender<()>, client_id: String) {
     const INITIAL_DELAY: Duration = Duration::from_secs(1);
     const MAX_DELAY: Duration = Duration::from_secs(5 * 60);
 
@@ -575,7 +576,9 @@ async fn clipboard_notification_listener(sender: tokio_mpsc::Sender<()>) {
         match TokioUnixStream::connect(&socket_path).await {
             Ok(mut stream) => {
                 retry_delay = INITIAL_DELAY;
-                if let Err(error) = consume_clipboard_notifications(&mut stream, &sender).await {
+                if let Err(error) =
+                    consume_clipboard_notifications(&mut stream, &sender, &client_id).await
+                {
                     warn!("Clipboard notification subscription ended: {}", error);
                 }
             }
@@ -599,12 +602,14 @@ async fn clipboard_notification_listener(sender: tokio_mpsc::Sender<()>) {
 async fn consume_clipboard_notifications(
     stream: &mut TokioUnixStream,
     sender: &tokio_mpsc::Sender<()>,
+    client_id: &str,
 ) -> Result<()> {
     let request = proto::Request {
         command: proto::Command::Subscribe.into(),
         files: vec![],
         clipboard_items: vec![],
         clear_timestamp: None,
+        client_id: client_id.to_owned(),
     };
     let mut request_buffer = Vec::with_capacity(request.encoded_len());
     request.encode(&mut request_buffer)?;

@@ -7,6 +7,7 @@ message Request {
   	repeated string files = 2;
 	repeated ClipboardItem clipboard_items = 3;
 	optional ClipboardTimestamp clear_timestamp = 4;
+	string client_id = 5;
 }
 
 enum Command {

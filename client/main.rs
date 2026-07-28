@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         files: vec!["/foo/bar/baz.txt".into()],
         clipboard_items: vec![],
         clear_timestamp: None,
+        client_id: String::new(),
     };
 
     // let request = proto::Request {

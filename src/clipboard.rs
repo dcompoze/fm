@@ -128,6 +128,13 @@ impl ClipboardState {
         self.paths_for(ClipboardOperation::Cut)
     }
 
+    pub fn remove_client_items(&mut self, client_id: &str) -> usize {
+        let original_len = self.items.len();
+        self.items
+            .retain(|_, item| item.timestamp.client_id != client_id);
+        original_len - self.items.len()
+    }
+
     pub fn apply_item(&mut self, item: ClipboardItem) {
         if self
             .clear_timestamp
@@ -264,6 +271,10 @@ impl HybridClock {
             logical: self.last_logical,
             client_id: self.client_id.clone(),
         }
+    }
+
+    pub fn client_id(&self) -> &str {
+        &self.client_id
     }
 
     pub fn observe(&mut self, timestamp: &HybridTimestamp) {

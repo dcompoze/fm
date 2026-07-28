@@ -36,8 +36,6 @@ prost = "0.13.3"
 prost-types = "0.13.3"
 serde = { version = "1.0.210", features = ["derive"] }
 thiserror = "1.0"
-subprocess = "0.2.9"
-sysinfo = "0.31.4"
 tokio = { version = "1.40.0", features = ["full"] }
 toml = "0.8.19"
 tui = { git = "https://github.com/dcompoze/tui", branch = "custom", default-features = true }

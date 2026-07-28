@@ -6,6 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 use std::{env, fs, io, path, process, vec};
 
 use anyhow::{anyhow, Error, Result};
@@ -18,6 +19,10 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute, ExecutableCommand};
+use fm::clipboard::{
+    get_socket_path, ClipboardItem as TimedClipboardItem, ClipboardOperation, ClipboardState,
+    HybridClock, HybridTimestamp,
+};
 use fs4::fs_std::FileExt;
 use log::{error, info, warn};
 use prost::Message;
@@ -30,18 +35,6 @@ use tui::Terminal;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{dbgf, files, proto, Config, File};
-
-/// Get the socket path, using XDG_RUNTIME_DIR if available.
-pub fn get_socket_path() -> PathBuf {
-    if let Some(runtime_dir) = dirs::runtime_dir() {
-        runtime_dir.join("fm.sock")
-    } else {
-        PathBuf::from("/tmp/fm.sock")
-    }
-}
-
-/// For backwards compatibility
-pub const SOCKET_PATH: &str = "/tmp/fm.sock";
 
 /// Get the user's home directory prefix for display purposes.
 fn get_home_prefix() -> String {
@@ -174,6 +167,51 @@ fn run_command_with_paths(command: &str, args: &[PathBuf]) -> Result<()> {
 
 type CrossTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
+const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(5 * 60);
+
+struct ClipboardConnection {
+    connected: bool,
+    next_attempt: Option<Instant>,
+    retry_delay: Duration,
+}
+
+impl ClipboardConnection {
+    fn new() -> Self {
+        Self {
+            connected: false,
+            next_attempt: Some(Instant::now()),
+            retry_delay: INITIAL_RECONNECT_DELAY,
+        }
+    }
+
+    fn succeeded(&mut self) {
+        self.connected = true;
+        self.next_attempt = None;
+        self.retry_delay = INITIAL_RECONNECT_DELAY;
+    }
+
+    fn failed(&mut self) {
+        self.connected = false;
+        self.next_attempt = Some(Instant::now() + self.retry_delay);
+        self.retry_delay = self
+            .retry_delay
+            .checked_mul(2)
+            .unwrap_or(MAX_RECONNECT_DELAY)
+            .min(MAX_RECONNECT_DELAY);
+    }
+
+    fn retry_due(&self) -> bool {
+        self.next_attempt
+            .is_some_and(|next_attempt| Instant::now() >= next_attempt)
+    }
+
+    fn retry_wait(&self) -> Option<Duration> {
+        self.next_attempt
+            .map(|next_attempt| next_attempt.saturating_duration_since(Instant::now()))
+    }
+}
+
 pub struct Application<'a> {
     pub terminal: &'a mut CrossTerminal,
     pub files: File,
@@ -187,6 +225,10 @@ pub struct Application<'a> {
     pub command_bar: CommandBar,
     pub status: Status,
     pub updater: Sender<()>,
+    clipboard: ClipboardState,
+    pending_clipboard: ClipboardState,
+    clipboard_clock: HybridClock,
+    clipboard_connection: ClipboardConnection,
 }
 
 pub struct Status {
@@ -243,6 +285,10 @@ impl<'a> Application<'a> {
                 git_modules: Arc::new(Mutex::new(HashSet::new())),
             },
             updater: sender,
+            clipboard: ClipboardState::default(),
+            pending_clipboard: ClipboardState::default(),
+            clipboard_clock: HybridClock::new("client"),
+            clipboard_connection: ClipboardConnection::new(),
         }
     }
 
@@ -842,7 +888,9 @@ impl<'a> Application<'a> {
             if selected.metadata.is_dir() {
                 selected.path.clone()
             } else {
-                selected.path.parent()
+                selected
+                    .path
+                    .parent()
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| self.files.path.clone())
             }
@@ -869,151 +917,189 @@ impl<'a> Application<'a> {
     }
 
     pub fn copy(&mut self) {
-        let marked = self.marked();
-        if marked.is_empty() {
-            if let Some(selected) = self.selected() {
-                self.copied.insert(selected.path.clone());
-            }
-        } else {
-            self.copied.extend(self.marked.iter().cloned());
-            self.marked.clear();
-        }
-        self.send_copied().expect("could not send copied");
+        self.apply_clipboard_operation(ClipboardOperation::Copy);
     }
 
     pub fn cut(&mut self) {
-        let marked = self.marked();
-        if marked.is_empty() {
-            if let Some(selected) = self.selected() {
-                self.cut.insert(selected.path.clone());
+        self.apply_clipboard_operation(ClipboardOperation::Cut);
+    }
+
+    fn apply_clipboard_operation(&mut self, operation: ClipboardOperation) {
+        let server_available = match self.synchronize() {
+            Ok(()) => true,
+            Err(error) => {
+                error!(
+                    "Clipboard synchronization failed, using local mode: {}",
+                    error
+                );
+                false
             }
+        };
+        let marked = self.marked();
+        let paths = if marked.is_empty() {
+            self.selected()
+                .map(|selected| vec![selected.path])
+                .unwrap_or_default()
         } else {
-            self.cut.extend(self.marked.iter().cloned());
             self.marked.clear();
+            marked
+        };
+
+        if paths.is_empty() {
+            return;
         }
-        // TODO: Handle the error.
-        self.send_cut().expect("could not send cut");
+
+        let timestamp = self.clipboard_clock.tick();
+        let items = self
+            .clipboard
+            .add_paths(paths, operation, timestamp.clone());
+        for item in items {
+            self.pending_clipboard.apply_item(item);
+        }
+        self.update_clipboard_sets();
+
+        if server_available {
+            if let Err(error) = self.synchronize() {
+                error!(
+                    "Clipboard synchronization failed, using local mode: {}",
+                    error
+                );
+            }
+        }
     }
 
     pub fn synchronize(&mut self) -> Result<(), Error> {
-        // Get the copy list from the server.
-        {
-            let mut client = UnixStream::connect(SOCKET_PATH)?;
-            let request = proto::Request {
-                command: proto::Command::GetCopy.into(),
-                files: vec![],
-            };
-            let response = send_server_request(&mut client, &request);
-
-            if let Ok(proto::Response { status, files }) = response {
-                if status != "success" {
-                    return Err(anyhow!("server command did not succeed"));
+        let was_connected = self.clipboard_connection.connected;
+        let result = self.synchronize_inner();
+        match result {
+            Ok(()) => {
+                self.clipboard_connection.succeeded();
+                if !was_connected {
+                    info!("Clipboard server connected");
                 }
-                self.copied = files.into_iter().map(PathBuf::from).collect();
+                Ok(())
+            }
+            Err(error) => {
+                self.clipboard_connection.failed();
+                Err(error)
+            }
+        }
+    }
+
+    fn synchronize_inner(&mut self) -> Result<(), Error> {
+        let has_pending = self.pending_clipboard.has_changes();
+        let request = proto::Request {
+            command: if has_pending {
+                proto::Command::Reconcile.into()
             } else {
-                return Err(anyhow!("failed to decode server response"));
-            }
-        }
-
-        // Get the cut list from the server.
-        {
-            let mut client = UnixStream::connect(SOCKET_PATH)?;
-            let request = proto::Request {
-                command: proto::Command::GetCut.into(),
-                files: vec![],
-            };
-
-            let response = send_server_request(&mut client, &request);
-            if let Ok(proto::Response { status, files }) = response {
-                if status != "success" {
-                    return Err(anyhow!("server command did not succeed"));
-                }
-                self.cut = files.into_iter().map(PathBuf::from).collect();
-            } else {
-                return Err(anyhow!("failed to decode server response"));
-            }
-        }
-        Ok(())
-    }
-
-    pub fn send_copied(&self) -> Result<(), Error> {
-        let mut copy_list: Vec<String> = vec![];
-        for path in self.copied.iter() {
-            copy_list.push(path.to_string_lossy().into());
-        }
-        let socket_path = "/tmp/fm.sock";
-        let mut client = UnixStream::connect(socket_path)?;
-
-        let request = proto::Request {
-            command: proto::Command::Copy.into(),
-            files: copy_list,
-        };
-
-        let response = send_server_request(&mut client, &request);
-
-        if let Ok(proto::Response { status, files }) = response {
-            if status != "success" {
-                return Err(anyhow!("server command did not succeed"));
-            }
-        } else {
-            return Err(anyhow!("failed to decode server response"));
-        }
-
-        Ok(())
-    }
-
-    pub fn send_cut(&self) -> Result<(), Error> {
-        let mut cut_list: Vec<String> = vec![];
-        for path in self.cut.iter() {
-            cut_list.push(path.to_string_lossy().into());
-        }
-        let socket_path = "/tmp/fm.sock";
-        let mut client = UnixStream::connect(socket_path)?;
-
-        let request = proto::Request {
-            command: proto::Command::Cut.into(),
-            files: cut_list,
-        };
-
-        let response = send_server_request(&mut client, &request);
-
-        if let Ok(proto::Response { status, files }) = response {
-            if status != "success" {
-                return Err(anyhow!("server command did not succeed"));
-            }
-        } else {
-            return Err(anyhow!("failed to decode server response"));
-        }
-
-        Ok(())
-    }
-
-    pub fn send_clear(&self) -> Result<(), Error> {
-        let mut client = UnixStream::connect(SOCKET_PATH)?;
-
-        let request = proto::Request {
-            command: proto::Command::Clear.into(),
+                proto::Command::Snapshot.into()
+            },
             files: vec![],
+            clipboard_items: self
+                .pending_clipboard
+                .items()
+                .map(|item| item.to_proto())
+                .collect(),
+            clear_timestamp: self.pending_clipboard.clear_timestamp().map(Into::into),
         };
+        let response = send_clipboard_request(&request)?;
+        let (items, clear_timestamp) = decode_clipboard_response(response)?;
 
-        let response = send_server_request(&mut client, &request);
+        let mut clipboard = ClipboardState::default();
+        clipboard.replace_with(items, clear_timestamp);
+        clipboard.observe_with(&mut self.clipboard_clock);
+        self.clipboard = clipboard;
+        self.pending_clipboard = ClipboardState::default();
+        self.update_clipboard_sets();
+        Ok(())
+    }
 
-        if let Ok(proto::Response { status, files }) = response {
-            if status != "success" {
-                return Err(anyhow!("server command did not succeed"));
+    pub fn reconnect_clipboard_if_due(&mut self) {
+        if self.clipboard_connection.retry_due() {
+            if let Err(error) = self.synchronize() {
+                error!("Clipboard reconnection failed, using local mode: {}", error);
             }
-        } else {
-            return Err(anyhow!("failed to decode server response"));
+        }
+    }
+
+    pub fn clipboard_reconnect_wait(&self) -> Option<Duration> {
+        self.clipboard_connection.retry_wait()
+    }
+
+    fn update_clipboard_sets(&mut self) {
+        self.copied = self.clipboard.copied_paths();
+        self.cut = self.clipboard.cut_paths();
+    }
+
+    fn apply_local_clear(&mut self) {
+        let timestamp = self.clipboard_clock.tick();
+        self.clipboard.apply_clear(timestamp.clone());
+        self.pending_clipboard.apply_clear(timestamp);
+        self.update_clipboard_sets();
+    }
+
+    fn restore_failed_items(&mut self, copied: HashSet<PathBuf>, cut: HashSet<PathBuf>) {
+        if !copied.is_empty() {
+            let timestamp = self.clipboard_clock.tick();
+            let items = self
+                .clipboard
+                .add_paths(copied, ClipboardOperation::Copy, timestamp);
+            for item in items {
+                self.pending_clipboard.apply_item(item);
+            }
         }
 
-        Ok(())
+        if !cut.is_empty() {
+            let timestamp = self.clipboard_clock.tick();
+            let items = self
+                .clipboard
+                .add_paths(cut, ClipboardOperation::Cut, timestamp);
+            for item in items {
+                self.pending_clipboard.apply_item(item);
+            }
+        }
+
+        self.update_clipboard_sets();
+    }
+
+    fn take_server_clipboard(&mut self) -> Result<(HashSet<PathBuf>, HashSet<PathBuf>), Error> {
+        let request = proto::Request {
+            command: proto::Command::Take.into(),
+            files: vec![],
+            clipboard_items: vec![],
+            clear_timestamp: None,
+        };
+        let response = send_clipboard_request(&request)?;
+        let (items, clear_timestamp) = decode_clipboard_response(response)?;
+        let clear_timestamp =
+            clear_timestamp.ok_or_else(|| anyhow!("server did not return a take timestamp"))?;
+
+        for item in &items {
+            self.clipboard_clock.observe(&item.timestamp);
+        }
+        self.clipboard_clock.observe(&clear_timestamp);
+
+        let mut snapshot = ClipboardState::default();
+        for item in items {
+            snapshot.apply_item(item);
+        }
+        self.clipboard = ClipboardState::default();
+        self.clipboard.apply_clear(clear_timestamp);
+        self.pending_clipboard = ClipboardState::default();
+        self.update_clipboard_sets();
+        self.clipboard_connection.succeeded();
+
+        Ok((snapshot.copied_paths(), snapshot.cut_paths()))
     }
 
     pub fn cmd_shell(&mut self, command: String) {
         // Use configured shell or fall back to defaults
         let (shell, shell_args) = if !self.configuration.shell.is_empty() {
             let shell = &self.configuration.shell[0];
-            let args: Vec<&str> = self.configuration.shell[1..].iter().map(|s| s.as_str()).collect();
+            let args: Vec<&str> = self.configuration.shell[1..]
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
             (shell.as_str(), args)
         } else {
             ("sh", vec!["-c"])
@@ -1072,32 +1158,76 @@ impl<'a> Application<'a> {
     }
 
     /// Execute paste operations for a set of files.
-    fn execute_paste(&self, operation: &str, files: &HashSet<PathBuf>, destination: &Path) {
+    fn execute_paste(
+        &self,
+        operation: &str,
+        files: &HashSet<PathBuf>,
+        destination: &Path,
+    ) -> HashSet<PathBuf> {
+        let mut failed = HashSet::new();
         for path in files.iter() {
             if let Err(e) = run_command_with_strings(
                 "fm-paste",
-                &[operation, &path.to_string_lossy(), &destination.to_string_lossy()],
+                &[
+                    operation,
+                    &path.to_string_lossy(),
+                    &destination.to_string_lossy(),
+                ],
             ) {
                 error!("Paste operation failed: {}", e);
+                failed.insert(path.clone());
             }
         }
+        failed
     }
 
     pub fn paste(&mut self, root: bool) {
-        if let Err(e) = self.synchronize() {
-            error!("Synchronization failed: {}", e);
-            return;
-        }
-
         let destination = self.get_paste_destination(root);
+        let server_available = match self.synchronize() {
+            Ok(()) => true,
+            Err(error) => {
+                error!(
+                    "Clipboard synchronization failed, pasting from local state: {}",
+                    error
+                );
+                false
+            }
+        };
 
-        // Execute copy operations
-        self.execute_paste("copy", &self.copied.clone(), &destination);
+        let (copied, cut, taken_from_server) = if server_available {
+            match self.take_server_clipboard() {
+                Ok((copied, cut)) => (copied, cut, true),
+                Err(error) => {
+                    self.clipboard_connection.failed();
+                    error!(
+                        "Could not take server clipboard, pasting from local state: {}",
+                        error
+                    );
+                    let copied = self.copied.clone();
+                    let cut = self.cut.clone();
+                    self.apply_local_clear();
+                    (copied, cut, false)
+                }
+            }
+        } else {
+            let copied = self.copied.clone();
+            let cut = self.cut.clone();
+            self.apply_local_clear();
+            (copied, cut, false)
+        };
 
-        // Execute cut operations
-        self.execute_paste("cut", &self.cut.clone(), &destination);
+        let failed_copies = self.execute_paste("copy", &copied, &destination);
+        let failed_cuts = self.execute_paste("cut", &cut, &destination);
+        self.restore_failed_items(failed_copies, failed_cuts);
 
-        self.clear_files();
+        if taken_from_server && self.pending_clipboard.has_changes() {
+            if let Err(error) = self.synchronize() {
+                error!(
+                    "Could not restore failed paste items to the server: {}",
+                    error
+                );
+            }
+        }
         self.refresh();
     }
 
@@ -1106,12 +1236,23 @@ impl<'a> Application<'a> {
     }
 
     pub fn clear_files(&mut self) {
-        self.marked = HashSet::new();
-        self.cut = HashSet::new();
-        self.copied = HashSet::new();
-        // TODO: Handle the error.
-        self.send_clear().expect("clear failed");
-        self.refresh();
+        let server_available = match self.synchronize() {
+            Ok(()) => true,
+            Err(error) => {
+                error!(
+                    "Clipboard synchronization failed, clearing local state: {}",
+                    error
+                );
+                false
+            }
+        };
+        self.marked.clear();
+        self.apply_local_clear();
+        if server_available {
+            if let Err(error) = self.synchronize() {
+                error!("Could not clear the server clipboard: {}", error);
+            }
+        }
     }
 
     pub fn cmd_pre(&mut self) {
@@ -1333,11 +1474,7 @@ impl<'a> Application<'a> {
         let input_lower = input.to_lowercase();
         for (i, file) in self.files.iter().enumerate() {
             if let Some(name) = file.path.file_name() {
-                if name
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains(&input_lower)
-                {
+                if name.to_string_lossy().to_lowercase().contains(&input_lower) {
                     self.list_state.select(Some(i.saturating_sub(1)));
                     break;
                 }
@@ -1638,6 +1775,35 @@ fn find_target_file<'a>(
     None
 }
 
+fn send_clipboard_request(request: &proto::Request) -> Result<proto::Response, Error> {
+    let socket_path = get_socket_path();
+    let mut client = UnixStream::connect(&socket_path).map_err(|error| {
+        anyhow!(
+            "could not connect to '{}': {}",
+            socket_path.display(),
+            error
+        )
+    })?;
+    send_server_request(&mut client, request)
+}
+
+fn decode_clipboard_response(
+    response: proto::Response,
+) -> Result<(Vec<TimedClipboardItem>, Option<HybridTimestamp>), Error> {
+    if response.status != "success" {
+        return Err(anyhow!("server command failed: {}", response.status));
+    }
+
+    let items = response
+        .clipboard_items
+        .into_iter()
+        .map(TimedClipboardItem::from_proto)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| anyhow!("server returned an invalid clipboard item"))?;
+    let clear_timestamp = response.clear_timestamp.map(HybridTimestamp::from);
+    Ok((items, clear_timestamp))
+}
+
 fn send_server_request(
     client: &mut UnixStream,
     request: &proto::Request,
@@ -1658,4 +1824,26 @@ fn send_server_request(
 
     let mut response_cursor = Cursor::new(response_buffer);
     Ok(proto::Response::decode(&mut response_cursor)?)
+}
+
+#[cfg(test)]
+mod clipboard_connection_tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_delay_uses_exponential_backoff_with_a_five_minute_cap() {
+        let mut connection = ClipboardConnection::new();
+
+        connection.failed();
+        assert_eq!(connection.retry_delay, Duration::from_secs(2));
+
+        for _ in 0..20 {
+            connection.failed();
+        }
+        assert_eq!(connection.retry_delay, MAX_RECONNECT_DELAY);
+
+        connection.succeeded();
+        assert_eq!(connection.retry_delay, INITIAL_RECONNECT_DELAY);
+        assert!(connection.next_attempt.is_none());
+    }
 }

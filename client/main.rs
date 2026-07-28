@@ -4,24 +4,23 @@ use std::error::Error;
 use std::io::Cursor;
 use std::vec;
 
+use fm::clipboard::get_socket_path;
+use fm::proto;
 use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-#[allow(warnings)]
-mod proto {
-    include!("../proto/server.rs");
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let socket_path = "/tmp/fm.sock";
+    let socket_path = get_socket_path();
 
-    let mut client = UnixStream::connect(socket_path).await?;
+    let mut client = UnixStream::connect(&socket_path).await?;
 
     let request = proto::Request {
         command: proto::Command::Copy.into(),
         files: vec!["/foo/bar/baz.txt".into()],
+        clipboard_items: vec![],
+        clear_timestamp: None,
     };
 
     // let request = proto::Request {

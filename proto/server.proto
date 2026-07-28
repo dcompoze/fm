@@ -5,6 +5,8 @@ package server;
 message Request {
 	Command command = 1;
   	repeated string files = 2;
+	repeated ClipboardItem clipboard_items = 3;
+	optional ClipboardTimestamp clear_timestamp = 4;
 }
 
 enum Command {
@@ -14,9 +16,32 @@ enum Command {
 	CLEAR = 3;
 	GET_COPY = 4;
 	GET_CUT = 5;
+	RECONCILE = 6;
+	SNAPSHOT = 7;
+	TAKE = 8;
 }
 
 message Response {
   	string status = 1;
 	repeated string files = 2;
+	repeated ClipboardItem clipboard_items = 3;
+	optional ClipboardTimestamp clear_timestamp = 4;
+}
+
+message ClipboardTimestamp {
+	uint64 physical_millis = 1;
+	uint64 logical = 2;
+	string client_id = 3;
+}
+
+enum ClipboardOperation {
+	CLIPBOARD_OPERATION_UNSPECIFIED = 0;
+	CLIPBOARD_OPERATION_COPY = 1;
+	CLIPBOARD_OPERATION_CUT = 2;
+}
+
+message ClipboardItem {
+	string path = 1;
+	ClipboardOperation operation = 2;
+	optional ClipboardTimestamp timestamp = 3;
 }

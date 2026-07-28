@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{env, fs, io, os, path, process, thread, vec};
 
 use anyhow::{anyhow, Error, Result};
-use application::{Application, SOCKET_PATH};
+use application::Application;
 use clap::{arg, Arg, ArgAction, Command};
 use config::Config;
 use crossterm::cursor::{position, Hide};
@@ -32,10 +32,9 @@ use crossterm::terminal::{
 use crossterm::tty::IsTty;
 use crossterm::{cursor, execute, queue, terminal, ExecutableCommand, QueueableCommand};
 use files::File;
+pub(crate) use fm::proto;
 use fs4::fs_std::FileExt;
 use log::{error, info, warn};
-use subprocess::{PopenConfig, Redirection};
-use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use tokio::task;
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::{Alignment, Constraint, Direction, Layout};
@@ -51,10 +50,6 @@ pub(crate) mod files;
 
 #[cfg(test)]
 mod tests;
-
-pub(crate) mod proto {
-    include!("../proto/server.rs");
-}
 
 type CrossTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -133,13 +128,6 @@ async fn main() -> Result<()> {
         fs::write(fm_config_file.clone(), config::DEFAULT_CONFIG)?;
     }
 
-    // Start the server daemon.
-    task::spawn_blocking(|| {
-        if !is_server_running() {
-            spawn_server().expect("could not spawn server");
-        }
-    });
-
     // Set up the file logger.
     let log_file = Box::new(
         OpenOptions::new()
@@ -190,6 +178,12 @@ async fn main() -> Result<()> {
     let (sender, receiver): (Sender<()>, Receiver<()>) = mpsc::channel();
     let mut app = Application::new(&mut terminal, configuration, root, sender);
     app.set_title()?;
+    if let Err(error) = app.synchronize() {
+        error!(
+            "Clipboard server is unavailable, starting in local mode: {}",
+            error
+        );
+    }
 
     let git_status = Arc::clone(&app.status.git_status);
     let commit_count = Arc::clone(&app.status.commit_count);
@@ -234,9 +228,17 @@ async fn main() -> Result<()> {
 
     // Process all input and window events.
     loop {
+        app.reconnect_clipboard_if_due();
         app.draw()?;
 
-        let event = read()?;
+        let event = if let Some(wait) = app.clipboard_reconnect_wait() {
+            if !poll(wait)? {
+                continue;
+            }
+            read()?
+        } else {
+            read()?
+        };
 
         const NEW_DIR_CMD: &str = "new-dir ";
         const NEW_FILE_CMD: &str = "new-file ";
@@ -538,20 +540,6 @@ fn flush_resize_events(event: Event) -> ((u16, u16), (u16, u16)) {
     ((0, 0), (0, 0))
 }
 
-fn spawn_server() -> Result<()> {
-    let _process = subprocess::Popen::create(
-        &["fm-server"],
-        PopenConfig {
-            stdout: Redirection::Pipe,
-            stderr: Redirection::Pipe,
-            detached: true,
-            ..Default::default()
-        },
-    )?;
-
-    Ok(())
-}
-
 #[macro_export]
 macro_rules! dbgf {
     ($arg:expr) => {{
@@ -564,11 +552,4 @@ macro_rules! dbgf {
             .unwrap();
         writeln!(&mut file, "{:?}", $arg).unwrap();
     }};
-}
-
-fn is_server_running() -> bool {
-    let system =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
-    let process = system.processes_by_exact_name("fm-server".as_ref()).next();
-    process.is_some()
 }

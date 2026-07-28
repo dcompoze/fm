@@ -19,6 +19,7 @@ enum Command {
 	RECONCILE = 6;
 	SNAPSHOT = 7;
 	TAKE = 8;
+	SUBSCRIBE = 9;
 }
 
 message Response {

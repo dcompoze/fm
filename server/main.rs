@@ -9,9 +9,9 @@ use fm::clipboard::{
 };
 use fm::proto;
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 struct ServerClipboard {
     state: ClipboardState,
@@ -44,6 +44,7 @@ impl Drop for SocketCleanup {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let clipboard = Arc::new(Mutex::new(ServerClipboard::new()));
+    let (clipboard_changes, _) = broadcast::channel(32);
 
     // Handle socket cleanup.
     let socket_path = get_socket_path();
@@ -57,6 +58,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     loop {
         let (stream, _) = listener.accept().await?;
         let clipboard = Arc::clone(&clipboard);
+        let clipboard_changes = clipboard_changes.clone();
         tokio::spawn(async move {
             let (reader, mut writer) = tokio::io::split(stream);
             let mut reader = BufReader::new(reader);
@@ -74,24 +76,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 eprintln!("Error while reading: {}", err);
                 return;
             }
-            let response = match proto::Request::decode(&mut Cursor::new(request_buffer)) {
-                Ok(request) => handle_request(request, &clipboard).await,
-                Err(_) => error_response("invalid request"),
+            let request = match proto::Request::decode(&mut Cursor::new(request_buffer)) {
+                Ok(request) => request,
+                Err(_) => {
+                    let _ = write_response(&mut writer, &error_response("invalid request")).await;
+                    return;
+                }
             };
 
-            let mut response_buffer = vec![];
-            if let Err(err) = response.encode(&mut response_buffer) {
-                eprintln!("Error while encoding the response: {}", err);
+            if proto::Command::try_from(request.command) == Ok(proto::Command::Subscribe) {
+                serve_subscription(&mut writer, clipboard_changes.subscribe()).await;
                 return;
             }
 
-            if let Err(err) = writer.write_u32(response_buffer.len() as u32).await {
-                eprintln!("Failed to write response length: {}", err);
-                return;
-            }
-
-            if let Err(err) = writer.write_all(&response_buffer).await {
-                eprintln!("Error while sending success message: {}", err);
+            let response = handle_request(request, &clipboard, &clipboard_changes).await;
+            if let Err(err) = write_response(&mut writer, &response).await {
+                eprintln!("Error while sending response: {}", err);
             }
         });
     }
@@ -100,6 +100,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn handle_request(
     request: proto::Request,
     clipboard: &Arc<Mutex<ServerClipboard>>,
+    clipboard_changes: &broadcast::Sender<()>,
 ) -> proto::Response {
     let command = match proto::Command::try_from(request.command) {
         Ok(command) => command,
@@ -120,6 +121,7 @@ async fn handle_request(
                 operation,
                 timestamp,
             );
+            let _ = clipboard_changes.send(());
             snapshot_response(&clipboard.state)
         }
         proto::Command::Clear => {
@@ -129,6 +131,7 @@ async fn handle_request(
                 .unwrap_or_else(|| clipboard.clock.tick());
             clipboard.clock.observe(&timestamp);
             clipboard.state.apply_clear(timestamp);
+            let _ = clipboard_changes.send(());
             snapshot_response(&clipboard.state)
         }
         proto::Command::GetCopy => legacy_paths_response(clipboard.state.copied_paths()),
@@ -153,12 +156,14 @@ async fn handle_request(
                 clipboard.clock.observe(timestamp);
             }
             clipboard.state.reconcile(items, clear_timestamp);
+            let _ = clipboard_changes.send(());
             snapshot_response(&clipboard.state)
         }
         proto::Command::Take => {
             let items: Vec<_> = clipboard.state.items().cloned().collect();
             let timestamp = clipboard.clock.tick();
             clipboard.state.apply_clear(timestamp.clone());
+            let _ = clipboard_changes.send(());
             proto::Response {
                 status: "success".into(),
                 files: vec![],
@@ -166,8 +171,41 @@ async fn handle_request(
                 clear_timestamp: Some((&timestamp).into()),
             }
         }
-        proto::Command::DefaultValue => error_response("unknown command"),
+        proto::Command::DefaultValue | proto::Command::Subscribe => {
+            error_response("unknown command")
+        }
     }
+}
+
+async fn serve_subscription<W>(writer: &mut W, mut changes: broadcast::Receiver<()>)
+where
+    W: AsyncWrite + Unpin,
+{
+    if write_response(writer, &success_response()).await.is_err() {
+        return;
+    }
+
+    loop {
+        match changes.recv().await {
+            Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                if write_response(writer, &success_response()).await.is_err() {
+                    return;
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => return,
+        }
+    }
+}
+
+async fn write_response<W>(writer: &mut W, response: &proto::Response) -> Result<(), Box<dyn Error>>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut response_buffer = vec![];
+    response.encode(&mut response_buffer)?;
+    writer.write_u32(response_buffer.len() as u32).await?;
+    writer.write_all(&response_buffer).await?;
+    Ok(())
 }
 
 fn snapshot_response(state: &ClipboardState) -> proto::Response {
@@ -194,6 +232,15 @@ fn legacy_paths_response(paths: impl IntoIterator<Item = PathBuf>) -> proto::Res
 fn error_response(status: &str) -> proto::Response {
     proto::Response {
         status: status.into(),
+        files: vec![],
+        clipboard_items: vec![],
+        clear_timestamp: None,
+    }
+}
+
+fn success_response() -> proto::Response {
+    proto::Response {
+        status: "success".into(),
         files: vec![],
         clipboard_items: vec![],
         clear_timestamp: None,
@@ -234,39 +281,64 @@ mod tests {
     #[tokio::test]
     async fn take_is_atomic_and_stale_items_cannot_return() {
         let clipboard = Arc::new(Mutex::new(ServerClipboard::new()));
+        let (changes, _) = broadcast::channel(8);
         let mut reconcile = request(proto::Command::Reconcile);
         reconcile.clipboard_items = vec![
             item("/copy", ClipboardOperation::Copy, 1),
             item("/cut", ClipboardOperation::Cut, 2),
         ];
-        let response = handle_request(reconcile, &clipboard).await;
+        let response = handle_request(reconcile, &clipboard, &changes).await;
         assert_eq!(response.clipboard_items.len(), 2);
 
-        let taken = handle_request(request(proto::Command::Take), &clipboard).await;
+        let taken = handle_request(request(proto::Command::Take), &clipboard, &changes).await;
         assert_eq!(taken.clipboard_items.len(), 2);
         assert!(taken.clear_timestamp.is_some());
 
-        let snapshot = handle_request(request(proto::Command::Snapshot), &clipboard).await;
+        let snapshot =
+            handle_request(request(proto::Command::Snapshot), &clipboard, &changes).await;
         assert!(snapshot.clipboard_items.is_empty());
 
         let mut stale = request(proto::Command::Reconcile);
         stale.clipboard_items = vec![item("/copy", ClipboardOperation::Copy, 1)];
-        let response = handle_request(stale, &clipboard).await;
+        let response = handle_request(stale, &clipboard, &changes).await;
         assert!(response.clipboard_items.is_empty());
     }
 
     #[tokio::test]
     async fn newest_operation_for_a_path_wins_during_reconciliation() {
         let clipboard = Arc::new(Mutex::new(ServerClipboard::new()));
+        let (changes, mut change_notifications) = broadcast::channel(8);
         let mut reconcile = request(proto::Command::Reconcile);
         reconcile.clipboard_items = vec![item("/same", ClipboardOperation::Cut, 1)];
-        handle_request(reconcile, &clipboard).await;
+        handle_request(reconcile, &clipboard, &changes).await;
+        assert_eq!(change_notifications.try_recv(), Ok(()));
 
         let mut reconcile = request(proto::Command::Reconcile);
         reconcile.clipboard_items = vec![item("/same", ClipboardOperation::Copy, 2)];
-        let response = handle_request(reconcile, &clipboard).await;
+        let response = handle_request(reconcile, &clipboard, &changes).await;
         let item = ClipboardItem::from_proto(response.clipboard_items[0].clone()).unwrap();
 
         assert_eq!(item.operation, ClipboardOperation::Copy);
+    }
+
+    #[tokio::test]
+    async fn subscription_receives_clipboard_change_notifications() {
+        let (changes, receiver) = broadcast::channel(8);
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let subscription =
+            tokio::spawn(async move { serve_subscription(&mut server, receiver).await });
+
+        let acknowledgement_length = client.read_u32().await.unwrap();
+        let mut acknowledgement = vec![0; acknowledgement_length as usize];
+        client.read_exact(&mut acknowledgement).await.unwrap();
+
+        changes.send(()).unwrap();
+        let notification_length = client.read_u32().await.unwrap();
+        let mut notification = vec![0; notification_length as usize];
+        client.read_exact(&mut notification).await.unwrap();
+        let response = proto::Response::decode(&mut Cursor::new(notification)).unwrap();
+
+        assert_eq!(response.status, "success");
+        subscription.abort();
     }
 }

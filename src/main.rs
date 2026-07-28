@@ -3,7 +3,7 @@ use core::time;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
-use std::io::{BufReader, Read, Stdout, Write};
+use std::io::{BufReader, Cursor, Read, Stdout, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ use config::Config;
 use crossterm::cursor::{position, Hide};
 use crossterm::event::MouseButton::{Left, Middle, Right};
 use crossterm::event::{
-    poll, read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyModifiers,
     ModifierKeyCode, MouseEvent, MouseEventKind,
 };
 use crossterm::style::{self, ResetColor, Stylize};
@@ -32,9 +32,15 @@ use crossterm::terminal::{
 use crossterm::tty::IsTty;
 use crossterm::{cursor, execute, queue, terminal, ExecutableCommand, QueueableCommand};
 use files::File;
+use fm::clipboard::get_socket_path;
 pub(crate) use fm::proto;
 use fs4::fs_std::FileExt;
+use futures::StreamExt;
 use log::{error, info, warn};
+use prost::Message;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream as TokioUnixStream;
+use tokio::sync::mpsc as tokio_mpsc;
 use tokio::task;
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::{Alignment, Constraint, Direction, Layout};
@@ -184,6 +190,11 @@ async fn main() -> Result<()> {
             error
         );
     }
+    let (clipboard_notification_sender, mut clipboard_notifications) = tokio_mpsc::channel(1);
+    task::spawn(clipboard_notification_listener(
+        clipboard_notification_sender,
+    ));
+    let mut event_reader = EventStream::new();
 
     let git_status = Arc::clone(&app.status.git_status);
     let commit_count = Arc::clone(&app.status.commit_count);
@@ -231,13 +242,28 @@ async fn main() -> Result<()> {
         app.reconnect_clipboard_if_due();
         app.draw()?;
 
-        let event = if let Some(wait) = app.clipboard_reconnect_wait() {
-            if !poll(wait)? {
+        let reconnect_wait = app.clipboard_reconnect_wait();
+        let wait = reconnect_wait.unwrap_or(Duration::from_secs(24 * 60 * 60));
+        let event = tokio::select! {
+            event = event_reader.next() => {
+                match event {
+                    Some(Ok(event)) => event,
+                    Some(Err(error)) => return Err(error.into()),
+                    None => break,
+                }
+            }
+            notification = clipboard_notifications.recv() => {
+                if notification.is_none() {
+                    return Err(anyhow!("clipboard notification channel closed"));
+                }
+                if let Err(error) = app.synchronize() {
+                    error!("Could not synchronize clipboard after server notification: {}", error);
+                }
                 continue;
             }
-            read()?
-        } else {
-            read()?
+            _ = tokio::time::sleep(wait), if reconnect_wait.is_some() => {
+                continue;
+            }
         };
 
         const NEW_DIR_CMD: &str = "new-dir ";
@@ -289,9 +315,7 @@ async fn main() -> Result<()> {
             }
         } else {
             match event {
-                Event::Resize(_, _) => {
-                    let (original_size, new_size) = flush_resize_events(event.clone());
-                }
+                Event::Resize(_, _) => {}
                 Event::FocusGained => {}
                 Event::FocusLost => {}
                 Event::Paste(content) => {}
@@ -498,21 +522,38 @@ async fn main() -> Result<()> {
                     (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
                         app.paste(true);
                     }
-                    (KeyCode::Char('g'), KeyModifiers::NONE) => match read()? {
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char('g'),
-                            ..
-                        }) => {
-                            app.top();
+                    (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                        let next_event = tokio::select! {
+                            event = event_reader.next() => event.transpose()?,
+                            notification = clipboard_notifications.recv() => {
+                                if notification.is_none() {
+                                    return Err(anyhow!("clipboard notification channel closed"));
+                                }
+                                if let Err(error) = app.synchronize() {
+                                    error!(
+                                        "Could not synchronize clipboard after server notification: {}",
+                                        error
+                                    );
+                                }
+                                None
+                            }
+                        };
+                        match next_event {
+                            Some(Event::Key(KeyEvent {
+                                code: KeyCode::Char('g'),
+                                ..
+                            })) => {
+                                app.top();
+                            }
+                            Some(Event::Key(KeyEvent {
+                                code: KeyCode::Char('e'),
+                                ..
+                            })) => {
+                                app.bottom();
+                            }
+                            _ => {}
                         }
-                        Event::Key(KeyEvent {
-                            code: KeyCode::Char('e'),
-                            ..
-                        }) => {
-                            app.bottom();
-                        }
-                        _ => {}
-                    },
+                    }
                     _ => {
                         dbgf!(format!("Unknown event: {:?} {:?}", code, modifiers));
                     }
@@ -524,20 +565,71 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// Resize events can occur in batches.
-// With a simple loop they can be flushed.
-// This function will keep the first and last resize event.
-fn flush_resize_events(event: Event) -> ((u16, u16), (u16, u16)) {
-    if let Event::Resize(x, y) = event {
-        let mut last_resize = (x, y);
-        while let Ok(true) = poll(Duration::from_millis(50)) {
-            if let Ok(Event::Resize(x, y)) = read() {
-                last_resize = (x, y);
+async fn clipboard_notification_listener(sender: tokio_mpsc::Sender<()>) {
+    const INITIAL_DELAY: Duration = Duration::from_secs(1);
+    const MAX_DELAY: Duration = Duration::from_secs(5 * 60);
+
+    let mut retry_delay = INITIAL_DELAY;
+    loop {
+        let socket_path = get_socket_path();
+        match TokioUnixStream::connect(&socket_path).await {
+            Ok(mut stream) => {
+                retry_delay = INITIAL_DELAY;
+                if let Err(error) = consume_clipboard_notifications(&mut stream, &sender).await {
+                    warn!("Clipboard notification subscription ended: {}", error);
+                }
+            }
+            Err(error) => {
+                warn!(
+                    "Could not subscribe to clipboard notifications at '{}': {}",
+                    socket_path.display(),
+                    error
+                );
             }
         }
-        return ((x, y), last_resize);
+
+        tokio::time::sleep(retry_delay).await;
+        retry_delay = retry_delay
+            .checked_mul(2)
+            .unwrap_or(MAX_DELAY)
+            .min(MAX_DELAY);
     }
-    ((0, 0), (0, 0))
+}
+
+async fn consume_clipboard_notifications(
+    stream: &mut TokioUnixStream,
+    sender: &tokio_mpsc::Sender<()>,
+) -> Result<()> {
+    let request = proto::Request {
+        command: proto::Command::Subscribe.into(),
+        files: vec![],
+        clipboard_items: vec![],
+        clear_timestamp: None,
+    };
+    let mut request_buffer = Vec::with_capacity(request.encoded_len());
+    request.encode(&mut request_buffer)?;
+    stream.write_u32(request_buffer.len() as u32).await?;
+    stream.write_all(&request_buffer).await?;
+
+    loop {
+        let response_length = stream.read_u32().await? as usize;
+        let mut response_buffer = vec![0; response_length];
+        stream.read_exact(&mut response_buffer).await?;
+        let response = proto::Response::decode(&mut Cursor::new(response_buffer))?;
+        if response.status != "success" {
+            return Err(anyhow!(
+                "clipboard subscription failed: {}",
+                response.status
+            ));
+        }
+
+        match sender.try_send(()) {
+            Ok(()) | Err(tokio_mpsc::error::TrySendError::Full(())) => {}
+            Err(tokio_mpsc::error::TrySendError::Closed(())) => {
+                return Err(anyhow!("clipboard notification receiver closed"));
+            }
+        }
+    }
 }
 
 #[macro_export]

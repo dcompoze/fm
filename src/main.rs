@@ -17,7 +17,7 @@ use std::{env, fs, io, os, path, process, thread, vec};
 use anyhow::{anyhow, Error, Result};
 use application::Application;
 use clap::{arg, Arg, ArgAction, Command};
-use commands::{COPY_CMD, MOVE_CMD, NEW_DIR_CMD, NEW_FILE_CMD, PATH_CMD, SEARCH_CMD, SHELL_CMD};
+use commands::Command as InputCommand;
 use config::Config;
 use crossterm::cursor::{position, Hide};
 use crossterm::event::MouseButton::{Left, Middle, Right};
@@ -269,43 +269,34 @@ async fn main() -> Result<()> {
             app.help.handle_event(event);
         } else if app.command_bar.command_entry_mode {
             if let Event::Key(key) = event {
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+                let width = app.terminal.get_frame().area().width;
+                if app
+                    .command_bar
+                    .suggestions
+                    .navigate(&app.command_bar.input_text, key, width)
+                {
+                    continue;
+                }
                 match key.code {
-                    KeyCode::Esc => {
-                        app.command_bar.input_text = String::default();
-                        app.command_bar.prompt_text = ":".into();
-                        app.command_bar.command_entry_mode = false;
-                    }
+                    KeyCode::Esc => app.command_bar.close(),
                     KeyCode::Backspace => {
-                        if app.command_bar.input_text == String::default() {
-                            app.command_bar.prompt_text = ":".into();
-                            app.command_bar.command_entry_mode = false;
-                        } else {
-                            app.command_bar.input_text.pop();
+                        if app.command_bar.input_text.pop().is_none() {
+                            app.command_bar.close();
                         }
                     }
                     KeyCode::Enter => {
-                        if app.command_bar.input_text.starts_with(NEW_DIR_CMD) {
-                            app.new_dir(app.command_bar.command_parameters(NEW_DIR_CMD));
-                        } else if app.command_bar.input_text.starts_with(NEW_FILE_CMD) {
-                            app.new_file(app.command_bar.command_parameters(NEW_FILE_CMD));
-                        } else if app.command_bar.input_text.starts_with(SEARCH_CMD) {
-                            app.search(app.command_bar.command_parameters(SEARCH_CMD));
-                        } else if app.command_bar.input_text.starts_with(SHELL_CMD) {
-                            app.cmd_shell(app.command_bar.command_parameters(SHELL_CMD));
-                        } else if app.command_bar.input_text == PATH_CMD {
-                            app.cmd_path();
-                        } else if app.command_bar.input_text == MOVE_CMD {
-                            app.cmd_mv();
-                        } else if app.command_bar.input_text == COPY_CMD {
-                            app.cmd_cp();
+                        let input = app.command_bar.input_text.clone();
+                        let resolved = app.command_bar.suggestions.resolve(&input);
+                        if let Some((command, argument)) = resolved {
+                            app.run_command(command, argument)?;
+                        } else {
+                            app.command_bar.close();
                         }
-                        app.command_bar.input_text = String::default();
-                        app.command_bar.prompt_text = ":".into();
-                        app.command_bar.command_entry_mode = false;
                     }
-                    KeyCode::Char(c) => {
-                        app.command_bar.input_text.push(c);
-                    }
+                    KeyCode::Char(c) => app.command_bar.input_text.push(c),
                     _ => {}
                 }
             }
@@ -381,7 +372,7 @@ async fn main() -> Result<()> {
                     code, modifiers, ..
                 }) => match (code, modifiers) {
                     (KeyCode::Char(':'), KeyModifiers::NONE) => {
-                        app.command_bar.command_entry_mode = true;
+                        app.command_bar.open(String::new());
                     }
                     (KeyCode::Esc, KeyModifiers::NONE) => {
                         app.clear();
@@ -393,7 +384,7 @@ async fn main() -> Result<()> {
                         app.previous_root()?;
                     }
                     (KeyCode::Char('q'), KeyModifiers::NONE) => {
-                        app.quit()?;
+                        app.run_command(InputCommand::Quit, "")?;
                     }
                     (KeyCode::Char('Q'), KeyModifiers::SHIFT) => {
                         app.quit_change(cmd.get_one::<String>("last-dir-path"))?;
@@ -478,8 +469,7 @@ async fn main() -> Result<()> {
                         app.images();
                     }
                     (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                        app.command_bar.input_text = SEARCH_CMD.into();
-                        app.command_bar.command_entry_mode = true;
+                        app.run_command(InputCommand::Search, "")?;
                     }
                     (KeyCode::Char('?'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                         app.help.open();
@@ -494,12 +484,10 @@ async fn main() -> Result<()> {
                         app.git_log();
                     }
                     (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
-                        app.command_bar.input_text = NEW_DIR_CMD.into();
-                        app.command_bar.command_entry_mode = true;
+                        app.run_command(InputCommand::NewDirectory, "")?;
                     }
                     (KeyCode::Char('n'), KeyModifiers::NONE) => {
-                        app.command_bar.input_text = NEW_FILE_CMD.into();
-                        app.command_bar.command_entry_mode = true;
+                        app.run_command(InputCommand::NewFile, "")?;
                     }
                     (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                         app.refresh();

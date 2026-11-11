@@ -11,6 +11,7 @@ use ratatui::widgets::List;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use crate::application::Application;
+use crate::commands::Command;
 use crate::config::{Config, DEFAULT_CONFIG};
 use crate::files::File;
 
@@ -78,6 +79,31 @@ fn status_fits_narrow_terminals() -> Result<()> {
             let status = app.statusbar(width as usize, false, String::new())?;
             terminal.draw(|frame| frame.render_widget(status, frame.area()))?;
         }
+        Ok(())
+    })
+}
+
+#[test]
+fn command_actions_share_prompts() -> Result<()> {
+    with_application(|app| {
+        for command in [
+            Command::NewFile,
+            Command::NewDirectory,
+            Command::Search,
+            Command::Shell,
+        ] {
+            app.run_command(command, "")?;
+            assert!(app.command_bar.command_entry_mode);
+            assert_eq!(app.command_bar.input_text, format!("{} ", command.name()));
+            let input = app.command_bar.input_text.clone();
+            let (resolved, argument) = app.command_bar.suggestions.resolve(&input).unwrap();
+            assert_eq!(resolved, command);
+            app.run_command(resolved, argument)?;
+            assert_eq!(app.command_bar.input_text, input);
+        }
+        app.run_command(Command::Search, "file-12")?;
+        assert_eq!(app.list_state.selected(), Some(12));
+        assert!(!app.command_bar.command_entry_mode);
         Ok(())
     })
 }

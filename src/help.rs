@@ -48,7 +48,10 @@ const HOTKEYS: &[(&str, &str)] = &[
     ("q", "Quit"),
     ("Shift+q", "Quit and change directory"),
     ("?", "Show hotkeys"),
-    ("Enter", "Run command (entry mode)"),
+    ("Tab, Down", "Next command suggestion"),
+    ("S-Tab, Up", "Previous command suggestion"),
+    ("Left, Right", "Command column"),
+    ("Enter", "Run selected command"),
     ("Esc", "Cancel command (entry mode)"),
 ];
 

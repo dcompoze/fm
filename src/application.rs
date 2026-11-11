@@ -34,8 +34,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 use ratatui::Terminal;
 use unicode_width::UnicodeWidthStr;
 
+use crate::commands::{Command, Suggestions};
 use crate::help::Help;
-use crate::{commands, dbgf, files, proto, Config, File};
+use crate::{dbgf, files, proto, Config, File};
 
 /// Get the user's home directory prefix for display purposes.
 fn get_home_prefix() -> String {
@@ -244,15 +245,22 @@ pub struct CommandBar {
     pub command_entry_mode: bool,
     pub prompt_text: String,
     pub input_text: String,
+    pub suggestions: Suggestions,
 }
 
 impl CommandBar {
-    pub fn command_parameters(&self, command: &str) -> String {
-        if let Some(text) = self.input_text.strip_prefix(command) {
-            text.to_owned()
-        } else {
-            self.input_text.clone()
-        }
+    pub fn open(&mut self, input: String) {
+        self.command_entry_mode = true;
+        self.prompt_text = ":".into();
+        self.input_text = input;
+        self.suggestions.reset();
+    }
+
+    pub fn close(&mut self) {
+        self.command_entry_mode = false;
+        self.prompt_text = ":".into();
+        self.input_text.clear();
+        self.suggestions.reset();
     }
 }
 
@@ -279,6 +287,7 @@ impl<'a> Application<'a> {
                 command_entry_mode: false,
                 prompt_text: ":".into(),
                 input_text: String::default(),
+                suggestions: Suggestions::default(),
             },
             help: Help::default(),
             status: Status {
@@ -293,6 +302,25 @@ impl<'a> Application<'a> {
             clipboard_clock: HybridClock::new("client"),
             clipboard_connection: ClipboardConnection::new(),
         }
+    }
+
+    pub fn run_command(&mut self, command: Command, argument: &str) -> Result<()> {
+        if command.takes_argument() && argument.is_empty() {
+            self.command_bar.open(format!("{} ", command.name()));
+            return Ok(());
+        }
+        self.command_bar.close();
+        match command {
+            Command::Copy => self.cmd_cp(),
+            Command::Move => self.cmd_mv(),
+            Command::NewDirectory => self.new_dir(argument.to_owned()),
+            Command::NewFile => self.new_file(argument.to_owned()),
+            Command::Path => self.cmd_path(),
+            Command::Quit => self.quit()?,
+            Command::Search => self.search(argument.to_owned()),
+            Command::Shell => self.cmd_shell(argument.to_owned()),
+        }
+        Ok(())
     }
 
     pub fn set_title(&mut self) -> Result<(), Error> {
@@ -356,7 +384,9 @@ impl<'a> Application<'a> {
             frame.render_stateful_widget(filelist, chunks[1], &mut self.list_state);
             frame.render_widget(statusbar, chunks[2]);
             if self.command_bar.command_entry_mode {
-                commands::render(frame, &self.command_bar.input_text, chunks[1]);
+                self.command_bar
+                    .suggestions
+                    .render(frame, &self.command_bar.input_text, chunks[1]);
             }
             if self.command_bar.command_entry_mode && size.width > 0 && size.height > 0 {
                 let cursor_x = (self.command_bar.prompt_text.width()

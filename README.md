@@ -88,8 +88,11 @@ A sample configuration file can be found in `desktop/config.toml` in this reposi
 
 ## Commands
 
+Tab and Shift-Tab select commands. Arrow keys move through the grid. Enter runs the selected command.
+
 | Command | Description |
 |:--|:--|
 | `new-file <name>` | Create a new file with the specified name |
 | `new-dir <name>` | Create a new directory with the specified name |
+| `quit` | Quit |
 

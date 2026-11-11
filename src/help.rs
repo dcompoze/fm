@@ -103,10 +103,11 @@ impl Help {
             width,
             height,
         );
-        let style = Style::default().fg(Color::White).bg(Color::Rgb(39, 42, 45));
+        let style = Style::default().fg(Color::White).bg(Color::Rgb(24, 26, 28));
         let block = Block::default()
-            .title("Help")
+            .title("Hotkeys")
             .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(180, 180, 180)))
             .style(style);
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
@@ -184,7 +185,7 @@ mod tests {
             if width == 120 {
                 let buffer = terminal.backend().buffer();
                 let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-                assert!(text.contains("Help"));
+                assert!(text.contains("Hotkeys"));
                 assert!(text.contains("Find all files"));
                 assert!(text.contains("Show hotkeys"));
             }

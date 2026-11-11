@@ -96,7 +96,7 @@ impl Help {
         let columns = if size.width >= 96 { 2 } else { 1 };
         let rows = HOTKEYS.len().div_ceil(columns);
         let width = (columns as u16 * 47 + 2).min(size.width);
-        let height = (rows as u16 + 3).min(size.height.saturating_sub(2));
+        let height = (rows as u16 + 2).min(size.height.saturating_sub(2));
         let area = Rect::new(
             size.x + (size.width - width) / 2,
             size.y + (size.height - height) / 2,
@@ -112,7 +112,7 @@ impl Help {
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
         frame.render_widget(block, area);
-        let visible_rows = inner.height.saturating_sub(1) as usize;
+        let visible_rows = inner.height as usize;
         self.offset = self.offset.min(rows.saturating_sub(visible_rows));
         let column_width = inner.width / columns as u16;
         for column in 0..columns {
@@ -133,15 +133,6 @@ impl Help {
                 visible_rows as u16,
             );
             frame.render_widget(Paragraph::new(lines), area);
-        }
-        if inner.height > 0 {
-            let footer = format!(
-                "Esc, ?: Close | k,l,Up,Down: Scroll {}/{}",
-                self.offset + 1,
-                rows.saturating_sub(visible_rows) + 1
-            );
-            let area = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
-            frame.render_widget(Paragraph::new(footer), area);
         }
     }
 }

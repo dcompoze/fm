@@ -74,8 +74,9 @@ A sample configuration file can be found in `desktop/config.toml` in this reposi
 | `o` | Open file using `xdg-open` |
 | `r` | Rename file or selected files |
 | `T`| Trash files |
-| `/` | Search files recursively in child directories |
-| `f` | Find a file in currently visible files |
+| `/` | Search the current file list |
+| `f` | Find files recursively |
+| `?` | Show hotkey grid, close with `Esc` or `?` |
 | `Ctrl-r` | Refresh view |
 | `y` | Copy file or selected files |
 | `c` | Cut file or selected files |

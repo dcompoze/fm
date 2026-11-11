@@ -23,17 +23,18 @@ use fm::clipboard::{
     get_socket_path, ClipboardItem as TimedClipboardItem, ClipboardOperation, ClipboardState,
     HybridClock, HybridTimestamp,
 };
-use fs4::fs_std::FileExt;
+use fs4::FileExt;
 use log::{error, info, warn};
 use prost::Message;
-use tui::backend::CrosstermBackend;
-use tui::layout::{Alignment, Constraint, Direction, Layout};
-use tui::style::{Color, Style};
-use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
-use tui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::Terminal;
 use unicode_width::UnicodeWidthStr;
 
+use crate::help::Help;
 use crate::{dbgf, files, proto, Config, File};
 
 /// Get the user's home directory prefix for display purposes.
@@ -223,6 +224,7 @@ pub struct Application<'a> {
     pub list_state: ListState,
     pub configuration: Config,
     pub command_bar: CommandBar,
+    pub help: Help,
     pub status: Status,
     pub updater: Sender<()>,
     clipboard: ClipboardState,
@@ -278,6 +280,7 @@ impl<'a> Application<'a> {
                 prompt_text: ":".into(),
                 input_text: String::default(),
             },
+            help: Help::default(),
             status: Status {
                 git_status: Arc::new(Mutex::new(String::default())),
                 commit_count: Arc::new(Mutex::new(String::default())),
@@ -315,13 +318,13 @@ impl<'a> Application<'a> {
     }
 
     pub fn draw(&mut self) -> Result<(), Error> {
-        self.terminal.autoresize()?; // TODO: Might be unnecessary since terminal.draw() already does this.
-        let size = self.terminal.get_frame().size();
+        self.terminal.autoresize()?;
+        let size = self.terminal.get_frame().area();
         let mut git_modules = HashSet::new();
         if let Ok(modules) = self.status.git_modules.lock() {
             git_modules = modules.clone();
         }
-        let frame_width = self.terminal.get_frame().size().width as usize;
+        let frame_width = size.width as usize;
         let files: Vec<ListItem> =
             self.item_list(0, frame_width, &git_modules, &self.configuration)?;
         let pathbar = self.pathbar()?;
@@ -331,8 +334,7 @@ impl<'a> Application<'a> {
             self.command_bar.input_text.clone(),
         )?;
 
-        let _ = self.terminal.draw(|frame| {
-            // Draw each visible file in the tree until we run out of space on the screen.
+        self.terminal.draw(|frame| {
             let filelist = List::new(files)
                 .style(Style::default().fg(Color::White))
                 .highlight_style(Style::default().bg(Color::Rgb(39, 42, 45)))
@@ -353,17 +355,16 @@ impl<'a> Application<'a> {
             frame.render_widget(pathbar, chunks[0]);
             frame.render_stateful_widget(filelist, chunks[1], &mut self.list_state);
             frame.render_widget(statusbar, chunks[2]);
+            if self.command_bar.command_entry_mode && size.width > 0 && size.height > 0 {
+                let cursor_x = (self.command_bar.prompt_text.width()
+                    + self.command_bar.input_text.width())
+                .min(size.width.saturating_sub(1) as usize) as u16;
+                frame.set_cursor_position((cursor_x, size.height - 1));
+            }
+            if self.help.visible {
+                self.help.render(frame);
+            }
         })?;
-        if self.command_bar.command_entry_mode {
-            execute!(
-                self.terminal.backend_mut(),
-                cursor::MoveTo(
-                    (self.command_bar.input_text.len() + self.command_bar.prompt_text.len()) as u16,
-                    size.height
-                ),
-                cursor::Show
-            )?;
-        }
         Ok(())
     }
 
@@ -399,17 +400,17 @@ impl<'a> Application<'a> {
                 }
                 let guide_span = Span::styled("│", Style::default().fg(Color::Rgb(53, 57, 62)));
                 let separator_span = Span::raw(" ");
-                let mut indent_span = Spans::from(vec![]);
-                //let mut indent_span = Spans::from(vec![guide_span.clone(), mark_span.clone(),
+                let mut indent_span = Line::from(vec![]);
+                //let mut indent_span = Line::from(vec![guide_span.clone(), mark_span.clone(),
                 // separator_span.clone()]);
                 for _ in (0..indent) {
                     let final_span = indent_span.clone();
-                    indent_span = Spans::from(vec![
+                    indent_span = Line::from(vec![
                         guide_span.clone(),
                         separator_span.clone(),
                         separator_span.clone(),
                     ]);
-                    indent_span.0.extend(final_span.0);
+                    indent_span.spans.extend(final_span.spans);
                 }
                 //let git_modified_span = git_modified(descendant.clone())?;
                 let mut count_span = descendant.info_count()?;
@@ -441,7 +442,7 @@ impl<'a> Application<'a> {
                 } else {
                     Span::styled(item_text, Style::default().fg(color))
                 };
-                let list_item = Spans::from(vec![
+                let list_item = Line::from(vec![
                     item_span,
                     separator_span.clone(),
                     mark_span,
@@ -449,7 +450,7 @@ impl<'a> Application<'a> {
                     separator_span.clone(),
                     count_span,
                 ]);
-                indent_span.0.extend(list_item.clone().0);
+                indent_span.spans.extend(list_item.spans);
                 items.push(ListItem::new(indent_span));
                 if !descendant.descendants.is_empty() {
                     let mut descendant_items =
@@ -467,21 +468,20 @@ impl<'a> Application<'a> {
         commandbar: bool,
         input: String,
     ) -> Result<Paragraph<'a>, Error> {
-        let statusbar: Paragraph;
-        if commandbar {
-            statusbar = Paragraph::new(vec![Spans::from(vec![
+        let statusbar = if commandbar {
+            Paragraph::new(vec![Line::from(vec![
                 Span::styled(self.command_bar.prompt_text.clone(), Style::default()),
                 Span::styled(input, Style::default()),
             ])])
             .block(Block::default().borders(Borders::NONE))
             .style(Style::default().fg(Color::White).bg(Color::Rgb(39, 42, 45)))
             .alignment(Alignment::Left)
-            .wrap(Wrap { trim: true });
+            .wrap(Wrap { trim: true })
         } else {
-            let mut git_status_span = Spans::from("");
-            let mut module_count_span = Spans::from("");
-            //let mut commit_count_span = Spans::from("");
-            let mut code_lines_span = Spans::from("");
+            let mut git_status_span = Line::from("");
+            let mut module_count_span = Line::from("");
+            //let mut commit_count_span = Line::from("");
+            let mut code_lines_span = Line::from("");
             if let Ok(output) = self.status.git_status.lock() {
                 git_status_span = Application::status_git_status_span(output.clone());
             }
@@ -496,7 +496,7 @@ impl<'a> Application<'a> {
                 if let Ok(modules) = self.status.git_modules.lock() {
                     module_count = modules.iter().count();
                 }
-                module_count_span = Spans::from(vec![
+                module_count_span = Line::from(vec![
                     Span::styled(
                         format!("{}  ", self.configuration.style.directory.icon),
                         Style::default().fg(Color::Cyan),
@@ -508,30 +508,31 @@ impl<'a> Application<'a> {
                 ]);
             }
             let link_target_span = self.status_link_target();
-            let pad_width = width
-                - (git_status_span.width()
+            let pad_width = width.saturating_sub(
+                git_status_span.width()
                     + module_count_span.width()
                     //+ commit_count_span.width()
                     + code_lines_span.width()
-                    + link_target_span.width());
-            let mut status_span = Spans::from(vec![]);
-            status_span.0.extend(git_status_span.0);
-            status_span.0.extend(module_count_span.0);
-            //status_span.0.extend(commit_count_span.0);
-            status_span.0.extend(code_lines_span.0);
-            status_span.0.extend(vec![
+                    + link_target_span.width(),
+            );
+            let mut status_span = Line::from(vec![]);
+            status_span.spans.extend(git_status_span.spans);
+            status_span.spans.extend(module_count_span.spans);
+            //status_span.spans.extend(commit_count_span.spans);
+            status_span.spans.extend(code_lines_span.spans);
+            status_span.spans.extend(vec![
                 link_target_span,
                 Span::styled(
                     format!("{:>pad_width$}", self.status_position().content),
                     Style::default(),
                 ),
             ]);
-            statusbar = Paragraph::new(status_span)
+            Paragraph::new(status_span)
                 .block(Block::default().borders(Borders::NONE))
                 .style(Style::default().fg(Color::White).bg(Color::Rgb(39, 42, 45)))
                 .alignment(Alignment::Left)
-                .wrap(Wrap { trim: false });
-        }
+                .wrap(Wrap { trim: false })
+        };
         Ok(statusbar)
     }
 
@@ -574,11 +575,11 @@ impl<'a> Application<'a> {
         }
     }
 
-    pub fn status_code_lines_span(output: String) -> Spans<'a> {
+    pub fn status_code_lines_span(output: String) -> Line<'a> {
         if output.is_empty() {
-            Spans::from("")
+            Line::from("")
         } else {
-            Spans::from(vec![Span::styled(
+            Line::from(vec![Span::styled(
                 format!("  {}  ", output),
                 Style::default(),
             )])
@@ -593,11 +594,11 @@ impl<'a> Application<'a> {
         }
     }
 
-    pub fn status_commit_count_span(output: String) -> Spans<'a> {
+    pub fn status_commit_count_span(output: String) -> Line<'a> {
         if output.is_empty() {
-            Spans::from("")
+            Line::from("")
         } else {
-            Spans::from(vec![Span::styled(
+            Line::from(vec![Span::styled(
                 format!("  {}  ", output),
                 Style::default(),
             )])
@@ -612,10 +613,10 @@ impl<'a> Application<'a> {
         }
     }
 
-    pub fn status_git_status_span(output: String) -> Spans<'a> {
+    pub fn status_git_status_span(output: String) -> Line<'a> {
         let status_lines: Vec<String> = output.lines().map(|s| s.to_owned()).collect();
         if status_lines.len() == 5 {
-            Spans::from(vec![
+            Line::from(vec![
                 Span::styled("  ", Style::default().fg(Color::Green)),
                 Span::styled(
                     format!("{} ", status_lines[0].clone()),
@@ -639,7 +640,7 @@ impl<'a> Application<'a> {
                 ),
             ])
         } else if status_lines.len() == 2 {
-            Spans::from(vec![
+            Line::from(vec![
                 Span::styled("  ", Style::default().fg(Color::Green)),
                 Span::styled(
                     format!("{} ", status_lines[0].clone()),
@@ -651,7 +652,7 @@ impl<'a> Application<'a> {
                 ),
             ])
         } else if status_lines.len() == 1 {
-            Spans::from(vec![
+            Line::from(vec![
                 Span::styled("  ", Style::default().fg(Color::Green)),
                 Span::styled(
                     format!("{}  ", status_lines[0].clone()),
@@ -659,7 +660,7 @@ impl<'a> Application<'a> {
                 ),
             ])
         } else {
-            Spans::from("")
+            Line::from("")
         }
     }
 
@@ -686,7 +687,7 @@ impl<'a> Application<'a> {
             .replacen(&format!("{}/", get_home_prefix()), "/", 1)
             .replacen('/', "  ", 1)
             .replace('/', "    ");
-        let pathbar = Paragraph::new(vec![Spans::from(vec![
+        let pathbar = Paragraph::new(vec![Line::from(vec![
             Span::styled(path, Style::default().fg(Color::White)),
             //Span::styled("  sample    ghi    qux", Style::default()),
         ])])
@@ -1752,12 +1753,11 @@ impl<'a> Application<'a> {
             .truncate(true)
             .open(file_path)?;
 
-        file_handle.lock_exclusive()?;
+        FileExt::lock(&file_handle)?;
 
         file_handle.write_all(cut_path.as_bytes())?;
         file_handle.sync_all()?;
-        #[allow(unstable_name_collisions)]
-        file_handle.unlock()?;
+        FileExt::unlock(&file_handle)?;
         Ok(())
     }
 }

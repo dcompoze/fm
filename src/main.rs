@@ -21,8 +21,8 @@ use config::Config;
 use crossterm::cursor::{position, Hide};
 use crossterm::event::MouseButton::{Left, Middle, Right};
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyModifiers,
-    ModifierKeyCode, MouseEvent, MouseEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, ModifierKeyCode, MouseEvent, MouseEventKind,
 };
 use crossterm::style::{self, ResetColor, Stylize};
 use crossterm::terminal::{
@@ -34,25 +34,21 @@ use crossterm::{cursor, execute, queue, terminal, ExecutableCommand, QueueableCo
 use files::File;
 use fm::clipboard::get_socket_path;
 pub(crate) use fm::proto;
-use fs4::fs_std::FileExt;
 use futures::StreamExt;
 use log::{error, info, warn};
 use prost::Message;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream as TokioUnixStream;
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::task;
-use tui::backend::{Backend, CrosstermBackend};
-use tui::layout::{Alignment, Constraint, Direction, Layout};
-use tui::style::{Color, Modifier, Style};
-use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
-use tui::{Frame, Terminal};
 
 mod application;
 mod config;
 pub(crate) mod error;
 pub(crate) mod files;
+mod help;
 
 #[cfg(test)]
 mod tests;
@@ -116,7 +112,7 @@ async fn main() -> Result<()> {
         .get_matches();
 
     // Get useful system information.
-    let user = whoami::username();
+    let user = whoami::username()?;
     let home_dir = dirs::home_dir().unwrap_or(format!("/home/{}", user).into());
     let config_dir = dirs::config_dir().unwrap_or(home_dir.join(".config"));
     let data_dir = dirs::data_dir().unwrap_or(home_dir.join(".local/share"));
@@ -272,7 +268,9 @@ async fn main() -> Result<()> {
         const SEARCH_CMD: &str = "search ";
         const SHELL_CMD: &str = "sh ";
 
-        if app.command_bar.command_entry_mode {
+        if app.help.visible {
+            app.help.handle_event(event);
+        } else if app.command_bar.command_entry_mode {
             if let Event::Key(key) = event {
                 match key.code {
                     KeyCode::Esc => {
@@ -327,7 +325,7 @@ async fn main() -> Result<()> {
                     modifiers,
                 }) => match kind {
                     MouseEventKind::Down(Left) => {
-                        let height = app.terminal.get_frame().size().height;
+                        let height = app.terminal.get_frame().area().height;
                         let file_count = app.files.count();
                         if row > 0 && (row as u32) < file_count && row < height {
                             let offset = app.list_state.offset();
@@ -337,7 +335,7 @@ async fn main() -> Result<()> {
                     }
                     MouseEventKind::Up(Left) => {}
                     MouseEventKind::Down(Right) => {
-                        let height = app.terminal.get_frame().size().height;
+                        let height = app.terminal.get_frame().area().height;
                         let file_count = app.files.count();
                         if row > 0 && (row as u32) < file_count && row < height && file_count > 1 {
                             let offset = app.list_state.offset();
@@ -358,7 +356,7 @@ async fn main() -> Result<()> {
                     }
                     MouseEventKind::Up(Right) => {}
                     MouseEventKind::Down(Middle) => {
-                        let height = app.terminal.get_frame().size().height;
+                        let height = app.terminal.get_frame().area().height;
                         let file_count = app.files.count();
                         if row == 0 {
                             app.previous_root()?;
@@ -381,6 +379,7 @@ async fn main() -> Result<()> {
                     MouseEventKind::ScrollLeft => {}
                     MouseEventKind::ScrollRight => {}
                 },
+                Event::Key(key) if key.kind == KeyEventKind::Release => {}
                 Event::Key(KeyEvent {
                     code, modifiers, ..
                 }) => match (code, modifiers) {
@@ -485,8 +484,11 @@ async fn main() -> Result<()> {
                         app.command_bar.input_text = SEARCH_CMD.into();
                         app.command_bar.command_entry_mode = true;
                     }
-                    (KeyCode::Char('?'), KeyModifiers::NONE) => {
-                        app.search_all().expect("search all failed");
+                    (KeyCode::Char('?'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                        app.help.open();
+                    }
+                    (KeyCode::Char('f'), KeyModifiers::NONE) => {
+                        app.search_all()?;
                     }
                     (KeyCode::Char('D'), KeyModifiers::SHIFT) => {
                         app.drag_and_drop();

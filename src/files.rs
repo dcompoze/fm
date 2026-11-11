@@ -8,9 +8,8 @@ use std::{fs, io, path, process};
 
 use anyhow::{anyhow, Error, Result};
 use git2::{DiffOptions, Repository};
-use tui::style::{Color, Style};
-use tui::text::{Span, Spans};
-use tui::widgets::ListItem;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 
 use crate::Config;
 
@@ -73,7 +72,10 @@ impl IntoIterator for File {
     type IntoIter = FileIterator;
 
     fn into_iter(self) -> Self::IntoIter {
-        FileIterator { root: self, index: 0 }
+        FileIterator {
+            root: self,
+            index: 0,
+        }
     }
 }
 
@@ -102,15 +104,19 @@ impl<'a> Iterator for FileIteratorRef<'a> {
     }
 }
 
-pub fn file_at_index<'a>(file: &'a mut File, current: &mut usize, index: usize) -> Option<&'a mut File> {
+pub fn file_at_index<'a>(
+    file: &'a mut File,
+    current: &mut usize,
+    index: usize,
+) -> Option<&'a mut File> {
     if *current == index {
-        return Some(file)
+        return Some(file);
     }
     *current += 1;
     if !file.descendants.is_empty() {
         for descendant in &mut file.descendants {
             if let Some(file) = file_at_index(descendant, current, index) {
-                return Some(file)
+                return Some(file);
             }
         }
     }
@@ -132,7 +138,10 @@ pub fn apply_to_all<'a>(
 
 impl File {
     pub fn is_empty(&self) -> bool {
-        self.metadata.is_dir() && fs::read_dir(&self.path).map(|d| d.count() == 0).unwrap_or(false)
+        self.metadata.is_dir()
+            && fs::read_dir(&self.path)
+                .map(|d| d.count() == 0)
+                .unwrap_or(false)
     }
 
     fn format_file_size(size: u64) -> String {
@@ -142,12 +151,12 @@ impl File {
             let units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
             let mut size_f = size as f64 / 1024.0;
             let mut unit_index = 0;
-            
+
             while size_f >= 1024.0 && unit_index < units.len() - 1 {
                 size_f /= 1024.0;
                 unit_index += 1;
             }
-            
+
             if size_f >= 100.0 {
                 format!("{:.0} {}", size_f, units[unit_index])
             } else if size_f >= 10.0 {
@@ -169,7 +178,7 @@ impl File {
                 }
                 Err(error) => {
                     if error.kind() == io::ErrorKind::PermissionDenied {
-                        return Ok(Span::styled("0", Style::default().fg(Color::Red)))
+                        return Ok(Span::styled("0", Style::default().fg(Color::Red)));
                     }
                 }
             }
@@ -178,7 +187,10 @@ impl File {
                 Style::default().fg(Color::Blue),
             ))
         } else {
-            Ok(Span::styled(Self::format_file_size(self.metadata.len()), Style::default()))
+            Ok(Span::styled(
+                Self::format_file_size(self.metadata.len()),
+                Style::default(),
+            ))
         }
     }
 
@@ -194,7 +206,7 @@ impl File {
                 || extension == "wav"
                 || extension == "avi"
             {
-                return true
+                return true;
             }
         }
         false
@@ -203,7 +215,7 @@ impl File {
     pub fn is_audio(&self) -> bool {
         if let Some(extension) = self.path.extension() {
             if extension == "mp3" {
-                return true
+                return true;
             }
         }
         false
@@ -218,7 +230,7 @@ impl File {
                 || extension == "webp"
                 || extension == "gif"
             {
-                return true
+                return true;
             }
         }
         false
@@ -227,7 +239,7 @@ impl File {
     pub fn is_archive(&self) -> bool {
         if let Some(extension) = self.path.extension() {
             if extension == "zip" || extension == "tar" || extension == "gz" {
-                return true
+                return true;
             }
         }
         false
@@ -241,7 +253,7 @@ impl File {
                 || extension == "ipynb"
                 || extension == "azw"
             {
-                return true
+                return true;
             }
         }
         false
@@ -271,7 +283,10 @@ fn git_modified<'a>(file: Box<File>) -> Result<Span<'a>, Error> {
     if let Ok(repo) = Repository::open(".") {
         if let Some(repo_path) = repo.path().parent() {
             if let Ok(submodule_path) = file.path.strip_prefix(repo_path) {
-                if repo.find_submodule(&submodule_path.to_string_lossy()).is_ok() {
+                if repo
+                    .find_submodule(&submodule_path.to_string_lossy())
+                    .is_ok()
+                {
                     return Ok(Span::styled(" S", Style::default().fg(Color::Cyan)));
                 }
             }

@@ -35,7 +35,7 @@ use ratatui::Terminal;
 use unicode_width::UnicodeWidthStr;
 
 use crate::help::Help;
-use crate::{dbgf, files, proto, Config, File};
+use crate::{commands, dbgf, files, proto, Config, File};
 
 /// Get the user's home directory prefix for display purposes.
 fn get_home_prefix() -> String {
@@ -355,6 +355,9 @@ impl<'a> Application<'a> {
             frame.render_widget(pathbar, chunks[0]);
             frame.render_stateful_widget(filelist, chunks[1], &mut self.list_state);
             frame.render_widget(statusbar, chunks[2]);
+            if self.command_bar.command_entry_mode {
+                commands::render(frame, &self.command_bar.input_text, chunks[1]);
+            }
             if self.command_bar.command_entry_mode && size.width > 0 && size.height > 0 {
                 let cursor_x = (self.command_bar.prompt_text.width()
                     + self.command_bar.input_text.width())

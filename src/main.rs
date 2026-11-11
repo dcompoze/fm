@@ -17,6 +17,7 @@ use std::{env, fs, io, os, path, process, thread, vec};
 use anyhow::{anyhow, Error, Result};
 use application::Application;
 use clap::{arg, Arg, ArgAction, Command};
+use commands::{COPY_CMD, MOVE_CMD, NEW_DIR_CMD, NEW_FILE_CMD, PATH_CMD, SEARCH_CMD, SHELL_CMD};
 use config::Config;
 use crossterm::cursor::{position, Hide};
 use crossterm::event::MouseButton::{Left, Middle, Right};
@@ -45,6 +46,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 use tokio::task;
 
 mod application;
+mod commands;
 mod config;
 pub(crate) mod error;
 pub(crate) mod files;
@@ -263,11 +265,6 @@ async fn main() -> Result<()> {
             }
         };
 
-        const NEW_DIR_CMD: &str = "new-dir ";
-        const NEW_FILE_CMD: &str = "new-file ";
-        const SEARCH_CMD: &str = "search ";
-        const SHELL_CMD: &str = "sh ";
-
         if app.help.visible {
             app.help.handle_event(event);
         } else if app.command_bar.command_entry_mode {
@@ -295,11 +292,11 @@ async fn main() -> Result<()> {
                             app.search(app.command_bar.command_parameters(SEARCH_CMD));
                         } else if app.command_bar.input_text.starts_with(SHELL_CMD) {
                             app.cmd_shell(app.command_bar.command_parameters(SHELL_CMD));
-                        } else if app.command_bar.input_text == "path" {
+                        } else if app.command_bar.input_text == PATH_CMD {
                             app.cmd_path();
-                        } else if app.command_bar.input_text == "mv" {
+                        } else if app.command_bar.input_text == MOVE_CMD {
                             app.cmd_mv();
-                        } else if app.command_bar.input_text == "cp" {
+                        } else if app.command_bar.input_text == COPY_CMD {
                             app.cmd_cp();
                         }
                         app.command_bar.input_text = String::default();
